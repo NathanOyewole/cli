@@ -1,4 +1,4 @@
-import ky, { type SearchParamsOption } from "ky";
+import type { SearchParamsOption } from "ky";
 
 import { ClientConfig } from "./ClientConfig.ts";
 
@@ -187,9 +187,8 @@ export type GetHistoryResponse = {
 };
 
 export class PredictionsClient {
-  static readonly #ky = ky.create({
+  static readonly #ky = ClientConfig.ky.extend({
     prefixUrl: `${ClientConfig.host}/prediction/v1`,
-    headers: ClientConfig.headers,
   });
 
   public static async searchEvents(params: {

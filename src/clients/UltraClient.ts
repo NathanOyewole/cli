@@ -1,5 +1,4 @@
 import type { Address, Base64EncodedBytes } from "@solana/kit";
-import ky from "ky";
 
 import { ClientConfig } from "./ClientConfig.ts";
 
@@ -154,9 +153,8 @@ export type PostReclaimExecuteResponse = {
 };
 
 export class UltraClient {
-  static readonly #ky = ky.create({
+  static readonly #ky = ClientConfig.ky.extend({
     prefixUrl: `${ClientConfig.host}/ultra/v1`,
-    headers: ClientConfig.headers,
   });
 
   public static async getOrder(

@@ -1,5 +1,3 @@
-import ky from "ky";
-
 import { ClientConfig } from "./ClientConfig.ts";
 
 export type SwapStats = {
@@ -113,9 +111,8 @@ type GetSpotHistoryResponse = {
 };
 
 export class DatapiClient {
-  static readonly #ky = ky.create({
+  static readonly #ky = ClientConfig.ky.extend({
     prefixUrl: ClientConfig.host,
-    headers: ClientConfig.headers,
     throwHttpErrors: false,
   });
 

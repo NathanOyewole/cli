@@ -1,5 +1,3 @@
-import ky from "ky";
-
 import { ClientConfig } from "./ClientConfig.ts";
 
 export type CheckEligibilityResponse = {
@@ -75,9 +73,8 @@ export type ExecuteResponse = {
 };
 
 export class VrfdClient {
-  static readonly #ky = ky.create({
+  static readonly #ky = ClientConfig.ky.extend({
     prefixUrl: ClientConfig.host,
-    headers: ClientConfig.headers,
   });
 
   public static async checkEligibility(

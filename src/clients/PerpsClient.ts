@@ -1,5 +1,3 @@
-import ky from "ky";
-
 import { resolveAsset } from "../lib/Asset.ts";
 import { ClientConfig } from "./ClientConfig.ts";
 
@@ -232,9 +230,8 @@ export type ExecuteResponse = {
 };
 
 export class PerpsClient {
-  static readonly #ky = ky.create({
+  static readonly #ky = ClientConfig.ky.extend({
     prefixUrl: "https://perps-api.jup.ag/v2",
-    headers: ClientConfig.headers,
   });
 
   public static async getMarkets(): Promise<

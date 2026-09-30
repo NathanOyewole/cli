@@ -1,5 +1,3 @@
-import ky from "ky";
-
 import { ClientConfig } from "./ClientConfig.ts";
 
 export type LendAsset = {
@@ -61,9 +59,8 @@ export type LendEarning = {
 };
 
 export class LendClient {
-  static readonly #ky = ky.create({
+  static readonly #ky = ClientConfig.ky.extend({
     prefixUrl: `${ClientConfig.host}/lend/v1`,
-    headers: ClientConfig.headers,
   });
 
   public static async getTokens(): Promise<LendToken[]> {
