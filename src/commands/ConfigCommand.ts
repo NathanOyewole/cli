@@ -21,6 +21,10 @@ export class ConfigCommand {
         "--api-key [key]",
         "Use an API key from https://portal.jup.ag/ for higher rate limits"
       )
+      .option(
+        "--rpc-url [url]",
+        "Solana RPC used by commands that send transactions directly (default: public mainnet RPC)"
+      )
       .action((opts) => this.set(opts));
   }
 
@@ -56,15 +60,21 @@ export class ConfigCommand {
     activeKey?: string;
     output?: "table" | "json";
     apiKey?: string | true;
+    rpcUrl?: string | true;
   }): void {
     if (opts.output && opts.output !== "table" && opts.output !== "json") {
       throw new Error("Invalid --output format. Must be 'table' or 'json'.");
     }
-    // --api-key without a value (Commander passes `true`) clears the key
-    const { apiKey, ...rest } = opts;
+    // A valueless --api-key or --rpc-url (Commander passes `true`) clears it
+    const { apiKey, rpcUrl, ...rest } = opts;
     Config.set({
       ...rest,
-      apiKey: typeof apiKey === "string" ? apiKey : undefined,
+      ...(apiKey !== undefined && {
+        apiKey: typeof apiKey === "string" ? apiKey : undefined,
+      }),
+      ...(rpcUrl !== undefined && {
+        rpcUrl: typeof rpcUrl === "string" ? rpcUrl : undefined,
+      }),
     });
     this.list();
   }

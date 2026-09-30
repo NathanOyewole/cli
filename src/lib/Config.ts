@@ -6,6 +6,7 @@ type Settings = {
   activeKey: "default" | string;
   output: "table" | "json";
   apiKey?: string | undefined;
+  rpcUrl?: string | undefined;
 };
 
 const DEFAULT_SETTINGS: Settings = {
@@ -56,6 +57,7 @@ export class Config {
           ? o.output
           : DEFAULT_SETTINGS.output,
       apiKey: typeof o?.apiKey === "string" ? o.apiKey : undefined,
+      rpcUrl: typeof o?.rpcUrl === "string" ? o.rpcUrl : undefined,
     };
   }
 
@@ -71,9 +73,13 @@ export class Config {
   }
 
   public static save(settings: Settings): void {
-    // Strip undefined optional fields so settings.json stays clean
-    const { apiKey, ...rest } = settings;
-    const out = apiKey ? { ...rest, apiKey } : rest;
+    // Strip unset optional fields so settings.json stays clean
+    const { apiKey, rpcUrl, ...rest } = settings;
+    const out = {
+      ...rest,
+      ...(apiKey && { apiKey }),
+      ...(rpcUrl && { rpcUrl }),
+    };
     writeFileSync(this.SETTINGS_FILE, JSON.stringify(out, null, 2) + "\n");
   }
 }

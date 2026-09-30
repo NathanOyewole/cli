@@ -106,3 +106,33 @@ describe("keys add (dist/index.js)", () => {
     expect(second.stdout + second.stderr).toContain("already exists");
   });
 });
+
+describe("config set (dist/index.js)", () => {
+  const settings = () =>
+    JSON.parse(
+      readFileSync(join(tmpHome, ".config", "jup", "settings.json"), "utf-8")
+    );
+
+  test("changing one setting keeps the others", () => {
+    runOk("config", "set", "--api-key", "abc");
+    runOk("config", "set", "--output", "json", "--rpc-url", "https://rpc.test");
+
+    expect(settings()).toEqual({
+      activeKey: "default",
+      output: "json",
+      apiKey: "abc",
+      rpcUrl: "https://rpc.test",
+    });
+  });
+
+  test("a valueless --rpc-url clears only the RPC url", () => {
+    runOk("config", "set", "--api-key", "abc", "--rpc-url", "https://rpc.test");
+    runOk("config", "set", "--rpc-url");
+
+    expect(settings()).toEqual({
+      activeKey: "default",
+      output: "table",
+      apiKey: "abc",
+    });
+  });
+});

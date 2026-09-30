@@ -33,3 +33,14 @@ jup config set --api-key <key>
 # Delete or unset the API key
 jup config set --api-key
 ```
+
+### Set RPC URL
+
+Commands that send transactions straight to Solana (instead of a Jupiter execute endpoint) use this RPC. Defaults to the public mainnet RPC, which is rate limited:
+
+```bash
+jup config set --rpc-url <url>
+
+# Unset to use the default
+jup config set --rpc-url
+```
