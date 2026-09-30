@@ -26,6 +26,13 @@ export const cases: ParityCase[] = [
     args: ["spot", "portfolio", "--address", WALLET],
   },
   {
+    id: "history",
+    feature: "portfolio-transactions",
+    kind: "read",
+    args: ["spot", "history", "--address", WALLET, "--limit", "2"],
+    expect: (json) => Array.isArray((json as { trades?: unknown }).trades),
+  },
+  {
     id: "transfer",
     feature: "send-address",
     kind: "tx",

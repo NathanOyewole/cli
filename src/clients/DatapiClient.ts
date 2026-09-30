@@ -115,6 +115,9 @@ export class DatapiClient {
     prefixUrl: ClientConfig.host,
     throwHttpErrors: false,
   });
+  static readonly #datapi = ClientConfig.ky.extend({
+    prefixUrl: "https://datapi.jup.ag",
+  });
 
   public static async getTokensSearch(
     req: GetSearchTokensRequest
@@ -149,7 +152,7 @@ export class DatapiClient {
     if (params.offset) {
       searchParams.offset = params.offset;
     }
-    return this.#ky.get("_datapi/v1/txs/users", { searchParams }).json();
+    return this.#datapi.get("v1/txs/users", { searchParams }).json();
   }
 
   public static async getTokensByMints(mints: string[]): Promise<Token[]> {
