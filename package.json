@@ -30,7 +30,8 @@
     "lint": "bunx oxlint src",
     "test": "bun test",
     "ci": "bun run fmt:check && bun run lint && bun run typecheck && bun run test",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build",
+    "parity": "bun scripts/parity/run.ts"
   },
   "dependencies": {
     "@scure/bip32": "^2.0.1",
