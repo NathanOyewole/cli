@@ -21,20 +21,20 @@ export const cases: ParityCase[] = [
   },
   {
     id: "portfolio",
-    feature: "portfolio-positions",
+    feature: "portfolio-tabs",
     kind: "read",
     args: ["spot", "portfolio", "--address", WALLET],
   },
   {
     id: "history",
-    feature: "portfolio-transactions",
+    feature: "portfolio-tabs",
     kind: "read",
     args: ["spot", "history", "--address", WALLET, "--limit", "2"],
     expect: (json) => Array.isArray((json as { trades?: unknown }).trades),
   },
   {
     id: "transfer",
-    feature: "send-address",
+    feature: "send-tabs",
     kind: "tx",
     args: [
       "spot",

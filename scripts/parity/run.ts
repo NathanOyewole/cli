@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { FEATURES } from "./features.ts";
 import { WALLET, type ParityCase } from "./types.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -18,6 +19,7 @@ type Result = { area: string; c: ParityCase; verdict: Verdict; detail: string };
 
 const areaFilter = process.argv.slice(2).filter((a) => !a.startsWith("-"));
 const skipBuild = process.argv.includes("--no-build");
+const coverageOnly = process.argv.includes("--coverage");
 
 // A vault-backed keychain entry is never contacted in --dry-run, so it acts as
 // a watch-only key: the CLI builds real transactions for any public wallet.
@@ -189,9 +191,29 @@ async function loadCases(): Promise<{ area: string; cases: ParityCase[] }[]> {
       cases: (await import(join(HERE, f))).cases as ParityCase[],
     }))
   );
-  return areas.filter(
-    (a) => areaFilter.length === 0 || areaFilter.includes(a.area)
-  );
+  return areas;
+}
+
+function coverageGaps(areas: { cases: ParityCase[] }[]) {
+  const known = new Set(Object.values(FEATURES).flat());
+  const covered = new Set(areas.flatMap((a) => a.cases.map((c) => c.feature)));
+  return {
+    uncovered: [...known].filter((f) => !covered.has(f)),
+    unknown: [...covered].filter((f) => !known.has(f)),
+  };
+}
+
+const allAreas = await loadCases();
+const { uncovered, unknown } = coverageGaps(allAreas);
+for (const f of uncovered) {
+  console.log(`UNCOVERED   ${f}`);
+}
+for (const f of unknown) {
+  console.log(`UNKNOWN     ${f} (not a feature ID in features.ts)`);
+}
+const coverageOk = uncovered.length === 0 && unknown.length === 0;
+if (coverageOnly) {
+  process.exit(coverageOk ? 0 : 1);
 }
 
 if (!skipBuild) {
@@ -206,7 +228,10 @@ if (!skipBuild) {
 
 const results: Result[] = [];
 try {
-  for (const { area, cases } of await loadCases()) {
+  const selected = allAreas.filter(
+    (a) => areaFilter.length === 0 || areaFilter.includes(a.area)
+  );
+  for (const { area, cases } of selected) {
     for (const c of cases) {
       const [verdict, detail] = await check(c);
       results.push({ area, c, verdict, detail });
@@ -221,6 +246,6 @@ try {
 
 const count = (v: Verdict) => results.filter((r) => r.verdict === v).length;
 console.log(
-  `\n${count("PASS")} pass, ${count("FAIL")} fail, ${count("UNSUPPORTED")} unsupported, ${results.length} total`
+  `\n${count("PASS")} pass, ${count("FAIL")} fail, ${count("UNSUPPORTED")} unsupported, ${results.length} total; ${uncovered.length} feature IDs uncovered`
 );
-process.exit(count("FAIL") > 0 ? 1 : 0);
+process.exit(count("FAIL") > 0 || !coverageOk ? 1 : 0);
