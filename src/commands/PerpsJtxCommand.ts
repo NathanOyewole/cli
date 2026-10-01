@@ -16,6 +16,7 @@ import {
   randomClientOrderId,
   sizeOpenOrder,
   snapDown,
+  snapLimitPrice,
   type JtxOrderOutcome,
 } from "../lib/JtxOrder.ts";
 import { JupStake } from "../lib/JupStake.ts";
@@ -655,6 +656,10 @@ export class PerpsJtxCommand {
     const leverage = opts.leverage
       ? Number(opts.leverage)
       : Number(opts.size) / collateralUsd;
+    const book =
+      limitPrice === undefined
+        ? await JtxPerpsClient.getOrderbook(market.symbol, 25)
+        : undefined;
     const sizing = sizeOpenOrder({
       market,
       markPrice: market.markPrice,
@@ -662,6 +667,7 @@ export class PerpsJtxCommand {
       collateralUsd,
       leverage,
       limitPrice,
+      book: jtxSide === "Bid" ? book?.asks : book?.bids,
     });
 
     const signer = await Signer.load(opts.key ?? Config.load().activeKey);
@@ -777,7 +783,7 @@ export class PerpsJtxCommand {
     const quantity = isEntire ? positionSize : requested;
     const price =
       limitPrice !== undefined
-        ? snapDown(limitPrice, market.tickSize)
+        ? snapLimitPrice(limitPrice, closeSide, market.tickSize)
         : protectedPrice(
             closeSide === "Ask" ? market.bestBid : market.bestAsk,
             closeSide,

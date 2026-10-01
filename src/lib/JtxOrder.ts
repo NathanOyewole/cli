@@ -63,8 +63,51 @@ export function protectedPrice(
     : snapUp(reference * (1 - SLIPPAGE), tickSize);
 }
 
-// Base quantity for a new order so that `collateralUsd` covers initial margin
-// and the taker fee, mirroring the web's jtxPerpsTradeSimulation sizing.
+// Limit prices round away from the taker: down for buys, up for sells.
+export function snapLimitPrice(
+  price: number,
+  side: JtxSide,
+  tickSize: number
+): number {
+  return side === "Bid" ? snapDown(price, tickSize) : snapUp(price, tickSize);
+}
+
+export type BookLevel = [price: number, size: number];
+
+// Average price for taking `size` from the book, and whether the book was
+// deep enough to fill all of it.
+function estimateFill(
+  levels: BookLevel[] | undefined,
+  size: number
+): { averagePrice: number; complete: boolean } | null {
+  if (!levels?.length) {
+    return null;
+  }
+  const epsilon = size * 1e-12;
+  let remaining = size;
+  let filled = 0;
+  let quote = 0;
+  for (const [price, quantity] of levels) {
+    if (!(price > 0) || !(quantity > 0)) {
+      continue;
+    }
+    const fill = Math.min(remaining, quantity);
+    quote += fill * price;
+    filled += fill;
+    remaining -= fill;
+    if (remaining <= epsilon) {
+      break;
+    }
+  }
+  return filled > 0
+    ? { averagePrice: quote / filled, complete: remaining <= epsilon }
+    : null;
+}
+
+// Base quantity for a new order so that `collateralUsd` covers initial margin,
+// the taker fee, and the price impact of walking `book` (the levels a market
+// order takes: asks for a buy, bids for a sell). Mirrors the web's
+// jtxPerpsTradeSimulation sizing.
 export function sizeOpenOrder(opts: {
   market: SizingMarket;
   markPrice: number;
@@ -72,6 +115,7 @@ export function sizeOpenOrder(opts: {
   collateralUsd: number;
   leverage: number;
   limitPrice?: number;
+  book?: BookLevel[];
 }): { quantity: number; price: number; sizeUsd: number } {
   const { market, markPrice, side, collateralUsd, leverage, limitPrice } = opts;
   const max = maxLeverage(market);
@@ -80,11 +124,17 @@ export function sizeOpenOrder(opts: {
       `Leverage must be between ${MIN_LEVERAGE}x and ${max}x for this market.`
     );
   }
+  const step = market.stepSize;
   const isLimit = limitPrice !== undefined;
+  const levels = isLimit ? undefined : opts.book;
+  const entryPrice = isLimit
+    ? snapLimitPrice(limitPrice, side, market.tickSize)
+    : markPrice;
   const price = isLimit
-    ? snapDown(limitPrice, market.tickSize)
+    ? entryPrice
     : protectedPrice(markPrice, side, market.tickSize);
-  const marginLeverage = leverage >= max ? max - MAX_LEVERAGE_BUFFER : max;
+  const isMaxLeverage = leverage >= max;
+  const marginLeverage = isMaxLeverage ? max - MAX_LEVERAGE_BUFFER : max;
   const marginPrice = isLimit ? Math.max(markPrice, price) : markPrice;
   const feeBps = Math.max(
     market.takerFeeBps,
@@ -94,15 +144,100 @@ export function sizeOpenOrder(opts: {
   const collateralPerToken =
     marginPrice / marginLeverage +
     (Math.max(markPrice, price) * feeBps) / 10_000;
-  let size = collateralUsd / collateralPerToken;
-  if (leverage < max) {
-    size = Math.min(
-      size,
-      (collateralUsd * leverage) / (limitPrice ?? markPrice)
-    );
+  const adverseDifference = (fillPrice: number) =>
+    Math.max(side === "Bid" ? fillPrice - markPrice : markPrice - fillPrice, 0);
+  const targetNotional = collateralUsd * leverage;
+
+  let maximumSize = collateralUsd / collateralPerToken;
+  if (!isMaxLeverage) {
+    let targetSize = targetNotional / entryPrice;
+    if (levels?.length) {
+      let remainingNotional = targetNotional;
+      let filledSize = 0;
+      for (const [levelPrice, levelSize] of levels) {
+        if (!(levelPrice > 0) || !(levelSize > 0)) {
+          continue;
+        }
+        const fillNotional = Math.min(
+          remainingNotional,
+          levelPrice * levelSize
+        );
+        filledSize += fillNotional / levelPrice;
+        remainingNotional -= fillNotional;
+        if (remainingNotional <= targetNotional * 1e-12) {
+          targetSize = filledSize;
+          break;
+        }
+      }
+    }
+    maximumSize = Math.min(maximumSize, targetSize);
   }
-  const quantity = snapDown(size, market.stepSize);
-  const sizeUsd = Number((quantity * (limitPrice ?? markPrice)).toFixed(6));
+
+  // Shrink the order until collateral also covers the fill's adverse
+  // distance from the mark.
+  const sizeBeforeImpact = snapDown(maximumSize, step);
+  const sizingFill = estimateFill(levels, sizeBeforeImpact);
+  const sizingPrice = sizingFill?.complete ? sizingFill.averagePrice : price;
+  let quantity = snapDown(
+    Math.min(
+      maximumSize,
+      collateralUsd / (collateralPerToken + adverseDifference(sizingPrice))
+    ),
+    step
+  );
+  if (sizingFill?.complete) {
+    let low = Math.round(quantity / step);
+    let high = Math.round(sizeBeforeImpact / step);
+    while (low < high) {
+      const lots = Math.ceil((low + high) / 2);
+      const size = lots * step;
+      const fill = estimateFill(levels, size);
+      const funded =
+        fill?.complete &&
+        size * (collateralPerToken + adverseDifference(fill.averagePrice)) <=
+          collateralUsd;
+      if (funded) {
+        low = lots;
+      } else {
+        high = lots - 1;
+      }
+    }
+    quantity = snapDown(low * step, step);
+  }
+
+  // Below max leverage, take the neighbouring step when it lands closer to
+  // the target exposure and is still funded.
+  if (!isMaxLeverage) {
+    const notionalAt = (size: number): number | null => {
+      const fill = estimateFill(levels, size);
+      const fillPrice = isLimit
+        ? entryPrice
+        : fill?.complete
+          ? fill.averagePrice
+          : price;
+      const required =
+        size * collateralPerToken + size * adverseDifference(fillPrice);
+      return required <= collateralUsd
+        ? size * (isLimit || fill?.complete ? fillPrice : entryPrice)
+        : null;
+    };
+    const roundedUp = snapDown(quantity + step, step);
+    const downNotional = notionalAt(quantity);
+    const upNotional = notionalAt(roundedUp);
+    if (
+      downNotional !== null &&
+      upNotional !== null &&
+      Math.abs(upNotional - targetNotional) <
+        Math.abs(downNotional - targetNotional)
+    ) {
+      quantity = roundedUp;
+    }
+  }
+
+  const fill = estimateFill(levels, quantity);
+  const sizeUsd = Number(
+    (quantity * (fill?.complete ? fill.averagePrice : entryPrice)).toFixed(6)
+  );
   assertWithinLimits(market, isLimit, "open", quantity, sizeUsd);
   return { quantity, price, sizeUsd };
 }

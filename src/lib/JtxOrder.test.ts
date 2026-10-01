@@ -12,6 +12,7 @@ import {
   protectedPrice,
   sizeOpenOrder,
   snapDown,
+  snapLimitPrice,
   snapUp,
 } from "./JtxOrder.ts";
 
@@ -42,6 +43,13 @@ describe("snapping", () => {
   });
 });
 
+describe("snapLimitPrice", () => {
+  test("rounds away from the taker", () => {
+    expect(snapLimitPrice(0.344444, "Bid", 0.00001)).toBe(0.34444);
+    expect(snapLimitPrice(0.344444, "Ask", 0.00001)).toBe(0.34445);
+  });
+});
+
 describe("protectedPrice", () => {
   test("allows 1% slippage against the taker", () => {
     expect(protectedPrice(0.33, "Bid", 0.00001)).toBe(0.3333);
@@ -62,7 +70,7 @@ describe("sizeOpenOrder", () => {
     ).toEqual({ quantity: 151.5, price: 0.3333, sizeUsd: 49.995 });
   });
 
-  test("max leverage keeps a margin buffer for fees", () => {
+  test("max leverage keeps a margin buffer for fees and slippage", () => {
     expect(maxLeverage(JUP)).toBe(10);
     expect(
       sizeOpenOrder({
@@ -72,7 +80,40 @@ describe("sizeOpenOrder", () => {
         collateralUsd: 10,
         leverage: 10,
       })
-    ).toEqual({ quantity: 298.3, price: 0.3267, sizeUsd: 98.439 });
+    ).toEqual({ quantity: 271.6, price: 0.3267, sizeUsd: 89.628 });
+  });
+
+  test("max leverage sizes for the book's actual price impact", () => {
+    expect(
+      sizeOpenOrder({
+        market: JUP,
+        markPrice: 0.33,
+        side: "Ask",
+        collateralUsd: 10,
+        leverage: 10,
+        book: [
+          [0.3299, 100],
+          [0.3295, 1000],
+        ],
+      })
+    ).toEqual({ quantity: 295.1, price: 0.3267, sizeUsd: 97.27545 });
+  });
+
+  test("a market order walks the book to the target exposure", () => {
+    expect(
+      sizeOpenOrder({
+        market: JUP,
+        markPrice: 0.33,
+        side: "Bid",
+        collateralUsd: 10,
+        leverage: 5,
+        book: [
+          [0.3301, 50],
+          [0.331, 100],
+          [0.335, 1000],
+        ],
+      })
+    ).toEqual({ quantity: 151.2, price: 0.3333, sizeUsd: 50.007 });
   });
 
   test("limit order sizes at the limit price", () => {
@@ -86,6 +127,19 @@ describe("sizeOpenOrder", () => {
         limitPrice: 0.3,
       })
     ).toEqual({ quantity: 133.3, price: 0.3, sizeUsd: 39.99 });
+  });
+
+  test("a sell limit price rounds up to the tick", () => {
+    expect(
+      sizeOpenOrder({
+        market: JUP,
+        markPrice: 0.33,
+        side: "Ask",
+        collateralUsd: 20,
+        leverage: 2,
+        limitPrice: 0.344444,
+      })
+    ).toEqual({ quantity: 116.1, price: 0.34445, sizeUsd: 39.990645 });
   });
 
   test("rejects leverage outside the market's range", () => {

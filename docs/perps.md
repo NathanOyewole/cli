@@ -639,6 +639,7 @@ jup perps jtx set --asset JUP --remove-collateral 10
 ```
 
 - `--amount` is USDC collateral (minimum 10). Leverage is 1.1x up to the market's `maxLeverage`.
+- Sizing follows the web: a market order is sized against the live order book, so collateral also covers its price impact, and limit prices round to the tick away from you (down for buys, up for sells).
 - Market orders carry a worst price (`priceUsd`) 1% past the mark; they are rejected when the book is thin (`marketOrders: false` in `markets`), use `--limit` then.
 - Deposits are at least 5 USDC; withdrawals are capped at 95% of the account's free balance.
 
