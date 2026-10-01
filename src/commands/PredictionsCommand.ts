@@ -27,6 +27,8 @@ import { PredictionsDiscoveryCommand } from "./PredictionsDiscoveryCommand.ts";
 const MICRO = 1_000_000;
 const SELL_PRICE_BUFFER_MICRO = 20_000;
 const MIN_SELL_PRICE_MICRO = 10_000;
+/** Resting limit orders rarely fill at once, so don't hold the command for the full market-order wait. */
+const LIMIT_FILL_TIMEOUT_MS = 15_000;
 
 /** Smallest partial-sell step per venue, in micro-contracts (Saba can't be sold early). */
 const PARTIAL_SELL_STEP_MICRO: Record<Provider, number | null> = {
@@ -95,6 +97,10 @@ export class PredictionsCommand {
         "--limit <price>",
         "Limit buy at this max price per contract in USD, e.g. 0.42 (Polymarket markets)"
       )
+      .option(
+        "--slippage <bps>",
+        "Accept a quoted slippage up to this many bps (required when the quote is 5% or more)"
+      )
       .option("--key <name>", "Key to use for signing")
       .action((opts) => this.open(opts));
     predictions
@@ -108,6 +114,10 @@ export class PredictionsCommand {
         "Sell only this many contracts (partial close)"
       )
       .option("--order <pubkey>", "Limit order to cancel")
+      .option(
+        "--slippage <bps>",
+        "Accept a quoted slippage up to this many bps (required when the quote is 5% or more)"
+      )
       .option("--key <name>", "Key to use for signing")
       .action((opts) => this.close(opts));
     predictions
@@ -322,10 +332,14 @@ export class PredictionsCommand {
     amount: string;
     input: string;
     limit?: string;
+    slippage?: string;
     key?: string;
   }): Promise<void> {
     const side = this.normalizeSide(opts.side);
     const isYes = side === "yes";
+    const acceptedSlippageBps = PredictionsExecution.parseSlippageBps(
+      opts.slippage
+    );
     const signer = await Signer.load(opts.key ?? Config.load().activeKey);
     const market = await PredictionsClient.getMarket(opts.market);
     const provider = market.provider ?? "kalshi";
@@ -371,12 +385,18 @@ export class PredictionsCommand {
     });
 
     const { order } = res;
+    PredictionsExecution.assertSlippageAccepted(order, acceptedSlippageBps);
     const result = await PredictionsExecution.signAndExecute(signer, res, {
       ownerPubkey: order.userPubkey,
     });
     const fill = await this.trackFill(res, signer.address, {
       isLimit: !!limitPriceMicro,
     });
+    const error = PredictionsExecution.fillError(
+      fill,
+      order.orderPubkey,
+      result.signature
+    );
 
     const contracts = NumberConverter.fromMicroUsd(order.contractsMicro);
     const costUsd = NumberConverter.fromMicroUsd(order.orderCostUsd);
@@ -388,9 +408,12 @@ export class PredictionsCommand {
     const limitPriceUsd = limitPriceMicro
       ? NumberConverter.fromMicroUsd(limitPriceMicro)
       : null;
+    const maxBuyPriceUsd = PredictionsFormat.microOrNull(order.maxBuyPriceUsd);
+    const slippageBps = order.slippageBps ?? null;
 
     if (Output.isJson()) {
       Output.json({
+        ...(error && { error }),
         ...(Config.dryRun && { dryRun: true }),
         action: "open",
         marketId: opts.market,
@@ -400,6 +423,9 @@ export class PredictionsCommand {
         contracts,
         costUsd,
         feeUsd,
+        maxBuyPriceUsd,
+        slippageBps,
+        maxSlippageBps: order.maxSlippageBps ?? null,
         positionAvgPriceUsd,
         positionPayoutUsd,
         positionPubkey: order.positionPubkey,
@@ -408,6 +434,7 @@ export class PredictionsCommand {
         signature: result.signature,
         ...(Config.dryRun && { transaction: res.transaction }),
       });
+      this.failOn(error);
       return;
     }
 
@@ -434,6 +461,7 @@ export class PredictionsCommand {
         { label: "Contracts", value: String(contracts) },
         { label: "Cost", value: Output.formatDollar(costUsd) },
         { label: "Fee", value: Output.formatDollar(feeUsd) },
+        ...this.priceLimitRows("Max Buy Price", maxBuyPriceUsd, slippageBps),
         {
           label: "Position Avg Price",
           value: Output.formatDollar(positionAvgPriceUsd),
@@ -449,6 +477,33 @@ export class PredictionsCommand {
           : []),
       ],
     });
+    this.failOn(error);
+  }
+
+  /** The JSON or table already carries the details; only the exit code and table-mode line remain. */
+  private static failOn(error: string | null): void {
+    if (!error) {
+      return;
+    }
+    if (!Output.isJson()) {
+      console.log(`${chalk.red.bold("Error:")} ${error}`);
+    }
+    process.exitCode = 1;
+  }
+
+  private static priceLimitRows(
+    label: string,
+    priceUsd: number | null,
+    slippageBps: number | null
+  ): { label: string; value: string }[] {
+    return [
+      ...(priceUsd !== null
+        ? [{ label, value: Output.formatDollar(priceUsd, { decimals: 3 }) }]
+        : []),
+      ...(slippageBps !== null
+        ? [{ label: "Est. Slippage", value: `${slippageBps / 100}%` }]
+        : []),
+    ];
   }
 
   private static async openTicket(
@@ -515,9 +570,9 @@ export class PredictionsCommand {
   }
 
   /**
-   * Execute success means the order was placed, not filled. Market orders are
-   * matched by a keeper, so wait for the real fill state; limit orders rest on
-   * the book and atomic-swap venues settle within the transaction itself.
+   * Execute success means the order was placed, not filled. A keeper matches
+   * orders, so wait for the real fill state; a marketable limit order can fill
+   * at once, so it gets a short wait. Atomic-swap venues settle in the tx.
    */
   private static async trackFill(
     res: CreateOrderResponse,
@@ -532,13 +587,6 @@ export class PredictionsCommand {
         avgFillPriceUsd: null,
       };
     }
-    if (opts.isLimit) {
-      return {
-        orderStatus: "pending",
-        filledContracts: 0,
-        avgFillPriceUsd: null,
-      };
-    }
     if (res.executionModel === "atomic_swap") {
       return {
         orderStatus: "filled",
@@ -546,16 +594,19 @@ export class PredictionsCommand {
         avgFillPriceUsd: null,
       };
     }
-    return PredictionsExecution.waitForFill({
-      ownerPubkey,
-      orderPubkey: res.order.orderPubkey,
-      orderId:
-        res.clientOrderId ??
-        res.order.clientOrderId ??
-        res.externalOrderId ??
-        res.order.externalOrderId ??
-        null,
-    });
+    return PredictionsExecution.waitForFill(
+      {
+        ownerPubkey,
+        orderPubkey: res.order.orderPubkey,
+        orderId:
+          res.clientOrderId ??
+          res.order.clientOrderId ??
+          res.externalOrderId ??
+          res.order.externalOrderId ??
+          null,
+      },
+      opts.isLimit ? LIMIT_FILL_TIMEOUT_MS : undefined
+    );
   }
 
   private static fillRows(fill: OrderFill): { label: string; value: string }[] {
@@ -685,7 +736,10 @@ export class PredictionsCommand {
     return ((contractsMicro / BigInt(step)) * BigInt(step)).toString();
   }
 
-  /** Mirrors the web app: sell no lower than $0.02 under the bid, floored at $0.01. */
+  /**
+   * The floor jup.ag asks for: $0.02 under the bid, at least $0.01. The server
+   * may widen it on-chain; the order's `minSellPriceUsd` is the real floor.
+   */
   public static minSellPriceMicro(exitPriceMicro: string): string {
     return String(
       Math.max(
@@ -699,6 +753,7 @@ export class PredictionsCommand {
     position?: string;
     contracts?: string;
     order?: string;
+    slippage?: string;
     key?: string;
   }): Promise<void> {
     if (!opts.position === !opts.order) {
@@ -707,6 +762,9 @@ export class PredictionsCommand {
     if (opts.contracts && (opts.order || opts.position === "all")) {
       throw new Error("--contracts can only be used with a single --position.");
     }
+    const acceptedSlippageBps = PredictionsExecution.parseSlippageBps(
+      opts.slippage
+    );
     const signer = await Signer.load(opts.key ?? Config.load().activeKey);
 
     if (opts.order) {
@@ -728,7 +786,7 @@ export class PredictionsCommand {
       await this.claim(signer, position);
       return;
     }
-    await this.sell(signer, position, opts.contracts);
+    await this.sell(signer, position, opts.contracts, acceptedSlippageBps);
   }
 
   private static async cancelOrder(
@@ -880,9 +938,19 @@ export class PredictionsCommand {
   private static async sell(
     signer: Signer,
     position: PredictionPosition,
-    contractsInput?: string
+    contractsInput: string | undefined,
+    acceptedSlippageBps: number | undefined
   ): Promise<void> {
     const provider = position.marketMetadata.provider ?? "kalshi";
+    if (provider === "gx") {
+      throw new Error(
+        "Saba positions can't be sold before the market resolves."
+      );
+    }
+    const exitPrice = position.sellPriceUsd;
+    if (!exitPrice || exitPrice === "0") {
+      throw new Error("No bid to sell into right now. Try again later.");
+    }
     const heldMicro = BigInt(position.contractsMicro);
     let sellMicro = heldMicro;
     if (contractsInput !== undefined) {
@@ -899,48 +967,57 @@ export class PredictionsCommand {
           : BigInt(this.snapContractsMicro(requestedMicro, provider));
       if (sellMicro === 0n) {
         throw new Error(
-          provider === "gx"
-            ? "Saba positions can't be sold before the market resolves."
-            : "--contracts is below the smallest sellable amount for this market."
+          "--contracts is below the smallest sellable amount for this market."
         );
       }
     }
     const isFullClose = sellMicro === heldMicro;
 
-    let res: CreateOrderResponse;
-    if (isFullClose) {
-      const exitPrice = position.sellPriceUsd;
-      if (!exitPrice || exitPrice === "0") {
-        throw new Error("No bid to sell into right now. Try again later.");
-      }
-      res = await PredictionsClient.closePosition(
-        position.pubkey,
-        signer.address,
-        this.minSellPriceMicro(exitPrice)
-      );
-    } else {
-      res = await PredictionsClient.postOrder({
-        orderType: "market",
-        isBuy: false,
-        ownerPubkey: signer.address,
-        positionPubkey: position.pubkey,
-        contractsMicro: sellMicro.toString(),
-      });
-    }
+    const res = isFullClose
+      ? await PredictionsClient.closePosition(
+          position.pubkey,
+          signer.address,
+          this.minSellPriceMicro(exitPrice)
+        )
+      : await PredictionsClient.postOrder({
+          orderType: "market",
+          isBuy: false,
+          ownerPubkey: signer.address,
+          positionPubkey: position.pubkey,
+          contractsMicro: sellMicro.toString(),
+        });
 
     const { order } = res;
+    const proceedsMicro = this.sellValueMicroUsd(sellMicro, exitPrice);
+    PredictionsExecution.assertSlippageAccepted(
+      order,
+      acceptedSlippageBps,
+      proceedsMicro
+    );
     const result = await PredictionsExecution.signAndExecute(signer, res, {
       ownerPubkey: order.userPubkey,
     });
     const fill = await this.trackFill(res, signer.address, { isLimit: false });
+    const error = PredictionsExecution.fillError(
+      fill,
+      order.orderPubkey,
+      result.signature
+    );
 
     const contracts = NumberConverter.fromMicroUsd(order.contractsMicro);
     const costUsd = NumberConverter.fromMicroUsd(order.orderCostUsd);
     const feeUsd = NumberConverter.fromMicroUsd(order.estimatedTotalFeeUsd);
+    const sellPriceUsd = NumberConverter.fromMicroUsd(exitPrice);
+    const proceedsUsd = NumberConverter.fromMicroUsd(proceedsMicro.toString());
+    const minSellPriceUsd = PredictionsFormat.microOrNull(
+      order.minSellPriceUsd
+    );
+    const slippageBps = order.slippageBps ?? null;
     const side = position.isYes ? "yes" : "no";
 
     if (Output.isJson()) {
       Output.json({
+        ...(error && { error }),
         ...(Config.dryRun && { dryRun: true }),
         action: "close",
         event: position.eventMetadata.title,
@@ -951,11 +1028,17 @@ export class PredictionsCommand {
         contracts,
         costUsd,
         feeUsd,
+        sellPriceUsd,
+        proceedsUsd,
+        minSellPriceUsd,
+        slippageBps,
+        maxSlippageBps: order.maxSlippageBps ?? null,
         orderPubkey: order.orderPubkey,
         ...fill,
         signature: result.signature,
         ...(Config.dryRun && { transaction: res.transaction }),
       });
+      this.failOn(error);
       return;
     }
 
@@ -973,8 +1056,13 @@ export class PredictionsCommand {
         { label: "Market", value: position.marketMetadata.title },
         { label: "Side", value: PredictionsFormat.formatSide(side) },
         { label: "Contracts", value: String(contracts) },
-        { label: "Cost", value: Output.formatDollar(costUsd) },
+        {
+          label: "Sell Price",
+          value: Output.formatDollar(sellPriceUsd, { decimals: 3 }),
+        },
+        { label: "Est. Proceeds", value: Output.formatDollar(proceedsUsd) },
         { label: "Fee", value: Output.formatDollar(feeUsd) },
+        ...this.priceLimitRows("Min Sell Price", minSellPriceUsd, slippageBps),
         { label: "Position", value: position.pubkey },
         ...this.fillRows(fill),
         ...(!Config.dryRun
@@ -982,5 +1070,14 @@ export class PredictionsCommand {
           : []),
       ],
     });
+    this.failOn(error);
+  }
+
+  /** What a sell is worth at the current bid, in micro-USD (the web's close amount). */
+  public static sellValueMicroUsd(
+    contractsMicro: bigint,
+    priceMicro: string
+  ): bigint {
+    return (contractsMicro * BigInt(priceMicro)) / BigInt(MICRO);
   }
 }

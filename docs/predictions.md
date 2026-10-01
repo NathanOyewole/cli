@@ -248,6 +248,7 @@ jup predictions positions --position <pubkey>
 jup predictions open --market <marketId> --side yes --amount 10
 jup predictions open --market <marketId> --side no --amount 5 --input USDC
 jup predictions open --market <marketId> --side y --amount 10 --limit 0.42
+jup predictions open --market <marketId> --side yes --amount 500 --slippage 700
 jup predictions open --market <marketId> --side yes --amount 10 --dry-run
 ```
 
@@ -256,9 +257,11 @@ jup predictions open --market <marketId> --side yes --amount 10 --dry-run
 - `--amount`: input token amount (human-readable)
 - `--input`: input token symbol or mint (default: `USDC`); timed stock (BisonFi) markets accept USDC only
 - `--limit`: place a limit buy at this max price per contract in USD (between 0 and 1). Polymarket markets only
+- `--slippage`: accept the server's simulated slippage up to this many bps. The server quotes `slippageBps` for every order and caps it at `maxSlippageBps` (the order reverts above it). Like jup.ag's confirmation prompt, a quote of 500 bps (5%) or more is refused unless `--slippage` is at or above it; this also applies under `--dry-run`
 - Saba (`gx`) markets are bought as tickets and only support `--side yes`
 - Kalshi buys are currently disabled by the API; Kalshi positions can still be closed and claimed
-- After submitting a market order, the CLI waits up to 60 seconds for the keeper to fill it and reports `orderStatus`: `filled`, `failed`, or `pending` (still unfilled when the wait ended). Limit orders report `pending` and rest until filled or cancelled
+- After submitting a market order, the CLI waits up to 60 seconds for the keeper to fill it and reports `orderStatus`: `filled`, `failed`, or `pending` (still unfilled when the wait ended). Limit orders get a 15-second check, since a marketable limit can fill at once; otherwise they report `pending` and rest until filled or cancelled
+- A `failed` order (the keeper rejected it) exits non-zero; the JSON response still carries the order details plus an `error`. `pending` exits 0
 - `--dry-run` previews the order without signing, showing cost, fees, and payout. JSON response includes the unsigned base64 `transaction`
 
 ```js
@@ -272,6 +275,9 @@ jup predictions open --market <marketId> --side yes --amount 10 --dry-run
   "contracts": 10,
   "costUsd": 6.50,
   "feeUsd": 0.07,
+  "maxBuyPriceUsd": 0.72, // on-chain price cap the server set for the order
+  "slippageBps": 14, // simulated slippage the server quoted
+  "maxSlippageBps": 2500, // the order reverts above this
   "positionAvgPriceUsd": 0.65,
   "positionPayoutUsd": 10.00,
   "positionPubkey": "3qMZ...83tz",
@@ -306,9 +312,11 @@ jup predictions close --position <pubkey> --dry-run
 ```
 
 - The CLI auto-detects whether to sell or claim based on the market result
-- Full sells accept fills down to $0.02 under the current bid (never below $0.01), like jup.ag
-- `--contracts` rounds down to the venue's step (1 contract on Kalshi, 0.01 on Polymarket); Saba positions can't be sold early
-- Sells wait for the fill and report `orderStatus`, like `open`
+- Like jup.ag, full sells ask for a floor $0.02 under the current bid (never below $0.01), but the server sets the on-chain floor itself: `minSellPriceUsd` in the response, up to `maxSlippageBps` under the bid. Check it in the `--dry-run` preview
+- `--slippage <bps>` works as on `open`: a quote of 500 bps or more, or slippage that would cost $2,000 or more of the sale, is refused unless `--slippage` is at or above `slippageBps`
+- `--contracts` rounds down to the venue's step (1 contract on Kalshi, 0.01 on Polymarket)
+- Saba (`gx`) positions can't be sold, fully or partly; hold them until the market resolves, then claim
+- Sells wait for the fill and report `orderStatus`, like `open`; a `failed` sell exits non-zero
 - `--dry-run` previews without signing. JSON response includes the unsigned base64 `transaction`
 
 ```js
@@ -321,8 +329,13 @@ jup predictions close --position <pubkey> --dry-run
   "positionPubkey": "3qMZ...83tz",
   "partial": false,
   "contracts": 10,
-  "costUsd": 0,
+  "costUsd": 0, // always 0 for sells
   "feeUsd": 0.07,
+  "sellPriceUsd": 0.72, // current bid
+  "proceedsUsd": 7.20, // expected: contracts × sellPriceUsd, before fees
+  "minSellPriceUsd": 0.54, // on-chain floor the server set
+  "slippageBps": 14,
+  "maxSlippageBps": 2500,
   "orderPubkey": "2pf8...N33a",
   "orderStatus": "filled",
   "filledContracts": 10,
