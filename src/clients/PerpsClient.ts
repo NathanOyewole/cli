@@ -224,6 +224,51 @@ export type CancelResponse = {
   transactionType?: string;
 };
 
+export type PoolInfoResponse = {
+  longAvailableLiquidity: string;
+  longBorrowRatePercent: string;
+  longUtilizationPercent: string;
+  shortAvailableLiquidity: string;
+  shortBorrowRatePercent: string;
+  shortUtilizationPercent: string;
+  openFeePercent: string;
+  maxRequestExecutionSec: string;
+  maxPriceImpactFeePercent: string;
+};
+
+export type CollateralLimitsResponse = {
+  maxCollateralDepositTokenAmount: string;
+  maxCollateralDepositUsd: string;
+  minCollateralDepositTokenAmount: string;
+  minCollateralDepositUsd: string;
+  maxCollateralWithdrawalTokenAmount: string;
+  maxCollateralWithdrawalUsd: string;
+  minCollateralWithdrawalTokenAmount: string;
+  minCollateralWithdrawalUsd: string;
+};
+
+export type TraderStats = {
+  owner: string;
+  totalPnlUsd: string;
+  totalVolumeUsd: string;
+};
+
+export type TopTradersResponse = {
+  marketMint: string;
+  totalVolumeUsd: string;
+  startTimestamp: number;
+  endTimestamp: number;
+  topTradersByPnl: TraderStats[];
+  topTradersByVolume: TraderStats[];
+};
+
+export type TraderStatsResponse = {
+  totalPnlUsd: string;
+  totalVolumeUsd: string;
+  startTimestamp: number;
+  endTimestamp: number;
+};
+
 export type ExecuteResponse = {
   action: string;
   txid: string;
@@ -246,6 +291,52 @@ export class PerpsClient {
         return { asset, ...stats };
       })
     );
+  }
+
+  public static async getPoolInfo(mint: string): Promise<PoolInfoResponse> {
+    return this.#ky.get("pool-info", { searchParams: { mint } }).json();
+  }
+
+  public static async getCollateralLimits(
+    inputMint: string,
+    positionPubkey: string
+  ): Promise<CollateralLimitsResponse> {
+    return this.#ky
+      .get("positions/collateral-limits", {
+        searchParams: { inputMint, positionPubkey },
+      })
+      .json();
+  }
+
+  public static async getExpiredOrders(
+    walletAddress: string
+  ): Promise<CloseAllResponse> {
+    return this.#ky
+      .get("orders/expired", { searchParams: { walletAddress } })
+      .json();
+  }
+
+  public static async getTopTraders(params: {
+    marketMint: string;
+    year: string;
+    week: string;
+  }): Promise<TopTradersResponse> {
+    return this.#ky.get("top-traders", { searchParams: params }).json();
+  }
+
+  public static async getTraderStats(params: {
+    walletAddress: string;
+    marketMint: string;
+    year: string;
+    week: string;
+  }): Promise<TraderStatsResponse> {
+    return this.#ky.get("trader-stats", { searchParams: params }).json();
+  }
+
+  public static async exportTrades(walletAddress: string): Promise<string> {
+    return ClientConfig.ky
+      .get(`https://perps-data.jup.ag/trades/export/${walletAddress}`)
+      .text();
   }
 
   public static async getPositions(
@@ -323,6 +414,7 @@ export class PerpsClient {
     positionPubkey: string;
     receiveToken: string;
     sizeUsdDelta?: string;
+    collateralUsdDelta?: string;
     entirePosition?: boolean;
     maxSlippageBps: string;
   }): Promise<DecreasePositionResponse> {

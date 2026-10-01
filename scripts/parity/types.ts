@@ -6,6 +6,7 @@ export type ParityCase =
       args: string[];
       wallet?: string;
       key?: "generated";
+      resolve?: Resolve;
       expect?: (json: unknown) => boolean;
     }
   | {
@@ -18,6 +19,7 @@ export type ParityCase =
       // Simulation errors that only mean the wallet lacks funds; matching
       // failures get the UNFUNDED verdict instead of FAIL.
       expectSimError?: RegExp;
+      resolve?: Resolve;
     }
   | {
       id: string;
@@ -25,6 +27,11 @@ export type ParityCase =
       kind: "unsupported";
       reason: string;
     };
+
+// Looks up live inputs (e.g. a wallet that currently has an open position) at
+// run time. Each returned key replaces `$KEY` in args; `WALLET` also sets the
+// case wallet.
+export type Resolve = () => Promise<Record<string, string>>;
 
 export const WALLET = "$WALLET";
 

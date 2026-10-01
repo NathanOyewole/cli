@@ -37,7 +37,12 @@ bun run ci
   - `LendBorrowCommand` — `lend borrow vaults/vault/positions/history/liquidations/open/deposit/borrow/repay/withdraw/operate/close`
   - `LendMultiplyCommand` — `lend multiply vaults/open/set/close`
   - `LendToolsCommand` — `lend markets`, `lend stats earn/borrow/liquidity/dex/positions`, `lend strategies/calculator/transparency` (static data in `LendTransparency.ts`)
-- `PerpsCommand` — `perps positions/markets/open/set/close`
+- `PerpsCommand` — `perps positions/markets/open/set/close/history`; registers the perps subgroups below. `PerpsCollateral` implements `perps set --add-collateral/--remove-collateral`
+- `PerpsJlpCommand` — `perps jlp info/mint/burn`
+- `PerpsLoansCommand` — `perps loans info/positions/history/borrow/repay`
+- `PerpsLeaderboardCommand` — `perps leaderboard/stats`
+- `PerpsDeltaNeutralCommand` — `perps delta-neutral info/history/positions/deposit/withdraw`
+- `PerpsJtxCommand` — `perps jtx markets/orderbook/positions/history/open/close/set` (orderbook markets on gum-api)
 - `PortfolioCommand` — `portfolio positions/pnl/airdrops`, `portfolio addressbook list/add/remove`
 - `PredictionsCommand` — `predictions events/positions/open/close/history`; registers the predictions subcommand files below
 - `PredictionsAccountCommand` — `predictions orders/claim/leaderboard/profile/pnl/set-username`
@@ -67,6 +72,10 @@ bun run ci
 - `Output` — renders data as table (via cli-table3) or JSON based on config; also provides display formatters (`formatDollar`, `formatCompactDollar`, `formatBoolean`, `formatPercentageChange`)
 - `NumberConverter` — converts between human-readable and on-chain decimal amounts
 - `Swap` — shared swap execution logic used by SpotCommand; manual swap settings and Shield token warnings
+- `JtxOrder` — JTX order sizing (collateral × leverage within margin and fee), price/size snapping, order limits
+- `DeltaNeutralVault` — ntbundle program: account decoders (bundle, oracle, user), deposit/withdraw instruction builders, unsigned v0 tx via @solana/kit
+- `JupStake` — reads a wallet's max-locked staked JUP from the governance escrow (JTX private-beta gate)
+- `PerpsTx` — perps sign helpers: `signAndExecute` (perps-api `/transaction/execute`) and `signAndSend` (straight to RPC via `Rpc`), plus `--key`/`--address` resolution
 - `TriggerOrder` — pure limit/DCA order logic: intent → payload mapping, target prices (USD, market cap, % from market), expiry/interval parsing, minimums
 - `OrderTokens` — token metadata lookup for order lists (symbols, decimals, UI amounts)
 - `RewardsCampaign` — campaign status/claim-window rules and campaign application validation
@@ -96,7 +105,10 @@ bun run ci
 - `ContentClient` — content-api.jup.ag market briefs (Market Pulse)
 - `IntelClient` — Jupiter Intel AI token description and news (requires an API key)
 - `UltraClient` — Jupiter Ultra swap API (quote + execute)
-- `PerpsClient` — Jupiter Perps API v2 (positions, orders, TP/SL)
+- `PerpsClient` — Jupiter Perps API v2 (positions, orders, TP/SL, pool info, collateral limits, expired orders, leaderboard, CSV export)
+- `JlpClient` — Perps API v2 JLP pool (info, mint, burn) and JLP loans
+- `NeutralTradeClient` — Perps API proxy of Neutral Trade vault config, metrics, snapshots
+- `JtxPerpsClient` — JTX orderbook perps API (gum-api): markets, order book, trading accounts, cross-chain intents
 - `LendClient` — Jupiter Lend API (earn tokens, positions, earnings, earn and borrow instruction builders)
 - `PredictionsClient` — Jupiter Predictions API v1 (events, markets, positions, orders, tickets, claims, history, profiles, leaderboards)
 - `PredictionsArcadeClient` — Predictions API v1 `play/*` (1-minute arcade rounds and bets)
@@ -122,6 +134,12 @@ bun run ci
 **Lend borrow flow:** FluidClient (vault/position) → LendClient.postOperateInstructions → LendTx → Signer.signTransaction → Rpc.sendAndConfirm
 
 **Lend multiply flow:** LendFlashloan.borrowIx → SwapV1Client swap instruction → LendClient.postOperateInstructions → LendFlashloan.paybackIx → LendTx.compile (fits check) → Rpc.sendAndConfirm
+
+**JTX flow:** JtxPerpsClient.post{CreateOrder,CancelOrder,Collateral} → Signer.signTransaction → JtxPerpsClient.postExecute → poll order history
+
+**Delta neutral flow:** DeltaNeutralVault.getState/getUser → deposit/withdraw instructions → buildTransaction → Signer.signTransaction → Rpc.sendAndConfirm
+
+**JLP / loans / expired-order flow:** JlpClient.post* (or PerpsClient.getExpiredOrders) → Signer.signTransaction → Rpc.sendAndConfirm
 
 **Predictions flow:** PredictionsClient.postOrder → Signer.signTransaction → PredictionsClient.postExecute (echoes `execution.context`) → PredictionsExecution.waitForFill (orders, then history)
 
