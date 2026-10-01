@@ -24,7 +24,16 @@ export type ParityCase =
   | {
       id: string;
       feature: string;
+      // The CLI cannot do it: browser-only, access-gated, or not live.
       kind: "unsupported";
+      reason: string;
+    }
+  | {
+      id: string;
+      feature: string;
+      // The command is built, but nothing live exists to run it against right
+      // now (e.g. no claimable campaign).
+      kind: "untested";
       reason: string;
     };
 

@@ -21,7 +21,7 @@ const RPC_URL = process.env.RPC_URL ?? "https://api.mainnet-beta.solana.com";
 const DEFAULT_WALLET =
   process.env.PARITY_WALLET ?? "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9";
 
-type Verdict = "PASS" | "UNFUNDED" | "FAIL" | "UNSUPPORTED";
+type Verdict = "PASS" | "UNFUNDED" | "FAIL" | "UNTESTED" | "UNSUPPORTED";
 type Result = { area: string; c: ParityCase; verdict: Verdict; detail: string };
 
 const areaFilter = process.argv.slice(2).filter((a) => !a.startsWith("-"));
@@ -190,6 +190,9 @@ async function check(c: ParityCase): Promise<[Verdict, string]> {
   if (c.kind === "unsupported") {
     return ["UNSUPPORTED", c.reason];
   }
+  if (c.kind === "untested") {
+    return ["UNTESTED", c.reason];
+  }
   let vars: Record<string, string> = {};
   try {
     vars = c.resolve ? await c.resolve() : {};
@@ -299,7 +302,17 @@ try {
   );
   for (const { area, cases } of selected) {
     for (const c of cases) {
-      const [verdict, detail] = await check(c);
+      let [verdict, detail] = await check(c);
+      // Live markets move between build and simulation; a real defect fails twice.
+      if (verdict === "FAIL") {
+        const [retried, retryDetail] = await check(c);
+        if (retried !== "FAIL") {
+          [verdict, detail] = [
+            retried,
+            `${retryDetail} (passed on retry: ${detail.slice(0, 120)})`,
+          ];
+        }
+      }
       results.push({ area, c, verdict, detail });
       console.log(`${verdict.padEnd(11)} ${area}/${c.id}  ${detail}`);
     }
@@ -313,6 +326,6 @@ try {
 const count = (v: Verdict) => results.filter((r) => r.verdict === v).length;
 console.log(
   `
-${count("PASS")} pass, ${count("UNFUNDED")} unfunded, ${count("FAIL")} fail, ${count("UNSUPPORTED")} unsupported, ${results.length} total; ${uncovered.length} feature IDs uncovered`
+${count("PASS")} pass, ${count("UNFUNDED")} unfunded, ${count("FAIL")} fail, ${count("UNTESTED")} untested, ${count("UNSUPPORTED")} unsupported, ${results.length} total; ${uncovered.length} feature IDs uncovered`
 );
 process.exit(count("FAIL") > 0 || !coverageOk ? 1 : 0);

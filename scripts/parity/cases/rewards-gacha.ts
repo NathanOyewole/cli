@@ -196,7 +196,7 @@ export const cases: ParityCase[] = [
   {
     id: "rewards-claim",
     feature: "rewards-progress",
-    kind: "unsupported",
+    kind: "untested",
     reason:
       "`jup rewards claim` is built (GET claim -> sign -> POST postClaim), but no campaign is claimable right now: the only one in its claim window (asr-2026-q2) has its claim vault closed on-chain (simulation fails AccountNotInitialized), and jup.ag also shows it as ended",
   },
@@ -353,7 +353,7 @@ export const cases: ParityCase[] = [
   {
     id: "gacha-ship",
     feature: "gacha-collection",
-    kind: "unsupported",
+    kind: "untested",
     reason:
       "`jup gacha ship` exists but redeeming cards for delivery is a real-world shipment; its --dry-run stops at the Collector Crypt quote because preparing opens a shipment order, so there is no transaction to simulate",
   },

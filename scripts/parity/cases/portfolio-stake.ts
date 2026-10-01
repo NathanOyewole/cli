@@ -394,7 +394,7 @@ export const cases: ParityCase[] = [
   {
     id: "gift-claim",
     feature: "send-gift",
-    kind: "unsupported",
+    kind: "untested",
     reason:
       "`jup gift claim --code` is implemented, but simulating it needs a real unclaimed gift code, which only its recipient holds",
   },

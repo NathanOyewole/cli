@@ -246,7 +246,7 @@ const feed: ParityCase[] = [
   {
     id: "open-saba-ticket",
     feature: "predict-feed",
-    kind: "unsupported",
+    kind: "untested",
     reason:
       "Saba (gx) ticket buys are wired into `predictions open`, but no Saba market is listed to build against (newest ticket 2026-07-19)",
   },
@@ -287,7 +287,7 @@ const timed: ParityCase[] = [
     : {
         id: "timed-open",
         feature: "predict-timed",
-        kind: "unsupported",
+        kind: "untested",
         reason: "skipped: no upcoming BTC 15m market found at run time",
       },
 ];
@@ -543,7 +543,7 @@ const account: ParityCase[] = [
     : {
         id: "claim-all",
         feature: "predict-account",
-        kind: "unsupported",
+        kind: "untested",
         reason:
           "skipped: no public wallet had a claimable position at run time",
       },
@@ -558,7 +558,7 @@ const account: ParityCase[] = [
     : {
         id: "cancel-limit",
         feature: "predict-account",
-        kind: "unsupported",
+        kind: "untested",
         reason:
           "skipped: no public wallet had a resting limit order at run time",
       },
