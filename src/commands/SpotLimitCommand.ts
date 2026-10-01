@@ -683,6 +683,7 @@ export class SpotLimitCommand {
       type: "vertical",
       rows: [
         { label: "Orders", value: orderIds.join("\n") },
+        { label: "Transactions", value: String(transactions.length) },
         ...signatures.map((sig, i) => ({
           label:
             signatures.length === 1 ? "Tx Signature" : `Tx Signature ${i + 1}`,
