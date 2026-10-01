@@ -124,6 +124,36 @@ describe("LendSmart", () => {
     ).toEqual({ shares: 49364962213n, minToken0: 0n, minToken1: 99987108n });
   });
 
+  test("one-token full exits bound the single settled leg", () => {
+    expect(
+      LendSmart.oneTokenMax("withdraw", colCtx, 843501012930n, 1, 2)
+    ).toEqual({
+      tokenAmount: 1708707683n,
+      input: { max: true, minToken0: 0n, minToken1: 1708365941n },
+    });
+    expect(
+      LendSmart.oneTokenMax("withdraw", colCtx, 50000000000n, 0, 2)
+    ).toEqual({
+      tokenAmount: 85435226n,
+      input: { max: true, minToken0: 85418138n, minToken1: 0n },
+    });
+    expect(() =>
+      LendSmart.oneTokenMax("withdraw", colCtx, 843501012930n, 0, 2)
+    ).toThrow("token0 reserves too low");
+    expect(
+      LendSmart.oneTokenMax("payback", debtCtx, 1208191881492n, 1, 2)
+    ).toEqual({
+      tokenAmount: 2439204332n,
+      input: { max: true, minToken0: 0n, minToken1: 2439692173n },
+    });
+    expect(
+      LendSmart.oneTokenMax("payback", debtCtx, 1208191881492n, 0, 2)
+    ).toEqual({
+      tokenAmount: 2439894235n,
+      input: { max: true, minToken0: 2440382214n, minToken1: 0n },
+    });
+  });
+
   test("share balances split into pair tokens", () => {
     expect(LendSmart.splitShares("supply", 843501012930n, colCtx)).toEqual({
       token0: 416494938n,

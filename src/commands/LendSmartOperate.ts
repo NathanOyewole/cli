@@ -45,6 +45,10 @@ type SideMove = {
   full: boolean;
 };
 
+// A full exit of one side: settled in one pair token (0 or 1, the web's
+// variable-mode Max) or proportionally in both.
+type FullExit = "both" | 0 | 1 | null;
+
 export class LendSmartOperate {
   public static slippageOption(): [string, string] {
     return [
@@ -69,30 +73,19 @@ export class LendSmartOperate {
     ) {
       throw new Error(`DEX data is unavailable for vault ${vault.id}.`);
     }
-    for (const [flag, value, smart] of [
-      ["--deposit1/--collateral1", opts.deposit1, colCtx],
-      ["--withdraw1", opts.withdraw1, colCtx],
-      ["--borrow1", opts.borrow1, debtCtx],
-      ["--repay1", opts.repay1, debtCtx],
+    const colExit = this.fullExit(opts.withdraw, opts.withdraw1);
+    const debtExit = this.fullExit(opts.repay, opts.repay1);
+    for (const [flag, value, smart, exit] of [
+      ["--deposit1/--collateral1", opts.deposit1, colCtx, null],
+      ["--withdraw1", opts.withdraw1, colCtx, colExit],
+      ["--borrow1", opts.borrow1, debtCtx, null],
+      ["--repay1", opts.repay1, debtCtx, debtExit],
     ] as const) {
-      if (value !== undefined && !smart) {
+      if (value !== undefined && !smart && exit !== "both") {
         throw new Error(
           `${flag} only applies to a smart (token pair) side; this side of vault ${vault.id} is a single token.`
         );
       }
-      if (value === "max") {
-        throw new Error(
-          `${flag} does not accept 'max'. Omit the amounts to exit the whole side.`
-        );
-      }
-    }
-    if (
-      (opts.withdraw === "max" && opts.withdraw1) ||
-      (opts.repay === "max" && opts.repay1)
-    ) {
-      throw new Error(
-        "'max' exits the whole side; it cannot be combined with a second-token amount."
-      );
     }
 
     const slippageBps = this.slippageBps(opts.slippage, colCtx, debtCtx);
@@ -103,11 +96,10 @@ export class LendSmartOperate {
         BigInt(nft?.borrow ?? 0) +
         (debtCtx ? 0n : BigInt(nft?.dustBorrow ?? 0)),
     };
-    const withdrawMax = opts.withdraw === "max";
-    const repayMax = opts.repay === "max" && current.debt > 0n;
+    const repayExit = current.debt > 0n ? debtExit : null;
     if (
-      opts.repay === "max" &&
-      !repayMax &&
+      debtExit !== null &&
+      repayExit === null &&
       !opts.deposit &&
       !opts.deposit1 &&
       !opts.withdraw &&
@@ -117,14 +109,14 @@ export class LendSmartOperate {
     ) {
       throw new Error("Position has no debt to repay.");
     }
-    const perfect = withdrawMax || repayMax;
+    const perfect = colExit !== null || repayExit !== null;
 
     const col = this.side({
       ctx: colCtx,
       side: vault.supplyToken,
       add: [opts.deposit, opts.deposit1],
-      remove: withdrawMax ? null : [opts.withdraw, opts.withdraw1],
-      full: withdrawMax,
+      remove: colExit === null ? [opts.withdraw, opts.withdraw1] : null,
+      exit: colExit,
       shares: current.col,
       kind: "collateral",
       perfect,
@@ -134,8 +126,8 @@ export class LendSmartOperate {
       ctx: debtCtx,
       side: vault.borrowToken,
       add: [opts.borrow, opts.borrow1],
-      remove: opts.repay === "max" ? null : [opts.repay, opts.repay1],
-      full: repayMax,
+      remove: debtExit === null ? [opts.repay, opts.repay1] : null,
+      exit: repayExit,
       shares: current.debt,
       kind: "debt",
       perfect,
@@ -339,7 +331,7 @@ export class LendSmartOperate {
     side: VaultSide;
     add: [string | undefined, string | undefined];
     remove: [string | undefined, string | undefined] | null;
-    full: boolean;
+    exit: FullExit;
     shares: bigint;
     kind: "collateral" | "debt";
     perfect: boolean;
@@ -367,7 +359,8 @@ export class LendSmartOperate {
       ? parse(p.remove, 2)
       : ([0n, 0n] as [bigint, bigint]);
     const adding = added[0] > 0n || added[1] > 0n;
-    const removing = removed[0] > 0n || removed[1] > 0n || p.full;
+    const full = p.exit !== null;
+    const removing = removed[0] > 0n || removed[1] > 0n || full;
     if (adding && removing) {
       throw new Error(
         p.kind === "collateral"
@@ -382,7 +375,7 @@ export class LendSmartOperate {
     const amounts = adding ? added : removed;
 
     if (!p.ctx) {
-      if (p.full) {
+      if (full) {
         return {
           input: { max: true },
           unitsDelta: -p.shares,
@@ -398,17 +391,39 @@ export class LendSmartOperate {
       };
     }
 
-    if (p.full) {
-      const action = removeAction;
+    if (p.exit === "both") {
       const estimate = this.quote(() =>
-        LendSmart.perfectMax(action, p.ctx!, p.shares, p.slippageBps)
+        LendSmart.perfectMax(removeAction, p.ctx!, p.shares, p.slippageBps)
       );
       return {
         input: this.quote(() =>
-          LendSmart.perfectMaxInput(action, p.ctx!, p.shares, p.slippageBps)
+          LendSmart.perfectMaxInput(
+            removeAction,
+            p.ctx!,
+            p.shares,
+            p.slippageBps
+          )
         ),
         unitsDelta: -p.shares,
         legs: [-estimate.token0Amt, -estimate.token1Amt],
+        full: true,
+      };
+    }
+    if (p.exit !== null) {
+      const leg = p.exit;
+      const { tokenAmount, input } = this.quote(() =>
+        LendSmart.oneTokenMax(
+          removeAction,
+          p.ctx!,
+          p.shares,
+          leg,
+          p.slippageBps
+        )
+      );
+      return {
+        input,
+        unitsDelta: -p.shares,
+        legs: leg === 0 ? [-tokenAmount, 0n] : [0n, -tokenAmount],
         full: true,
       };
     }
@@ -432,6 +447,22 @@ export class LendSmartOperate {
       legs: [sign * amounts[0], sign * amounts[1]],
       full: false,
     };
+  }
+
+  // 'max' on one leg exits the whole side in that token; on both legs (or on
+  // a normal side's only leg) it exits proportionally.
+  private static fullExit(
+    amount: string | undefined,
+    amount1: string | undefined
+  ): FullExit {
+    const max0 = amount === "max";
+    const max1 = amount1 === "max";
+    if ((max0 && amount1 && !max1) || (max1 && amount && !max0)) {
+      throw new Error(
+        "'max' exits the whole side; it cannot be combined with an amount of the other token."
+      );
+    }
+    return max0 && max1 ? "both" : max0 ? 0 : max1 ? 1 : null;
   }
 
   public static quote<T>(fn: () => T): T {
