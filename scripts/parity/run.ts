@@ -206,7 +206,7 @@ async function check(c: ParityCase): Promise<[Verdict, string]> {
   let run = runCli(home, [...flags, ...args]);
   for (
     let attempt = 1;
-    attempt < 5 && /rate limit/i.test(run.stdout);
+    attempt < 5 && /rate limit|too many requests/i.test(run.stdout);
     attempt++
   ) {
     await Bun.sleep(5000 * attempt);

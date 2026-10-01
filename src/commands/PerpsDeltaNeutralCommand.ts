@@ -78,7 +78,7 @@ export class PerpsDeltaNeutralCommand {
     const [config, metrics, state] = await Promise.all([
       NeutralTradeClient.getConfig(VAULT_ID),
       NeutralTradeClient.getMetrics(VAULT_ID),
-      DeltaNeutralVault.getState(),
+      DeltaNeutralVault.load(),
     ]);
     const scale = 10 ** state.bundle.assetDecimals;
     const [hour, minute] = config.processTime;
@@ -181,12 +181,10 @@ export class PerpsDeltaNeutralCommand {
     address?: string;
   }): Promise<void> {
     const wallet = await PerpsTx.resolveAddress(opts);
-    const [state, user] = await Promise.all([
-      DeltaNeutralVault.getState(),
-      DeltaNeutralVault.getUser(address(wallet)),
-    ]);
+    const state = await DeltaNeutralVault.load(address(wallet));
     const position =
-      user && userBalances(user, state.bundle.assetDecimals, state.pps);
+      state.user &&
+      userBalances(state.user, state.bundle.assetDecimals, state.pps);
 
     if (Output.isJson()) {
       Output.json({ position: position ?? null });
@@ -231,10 +229,9 @@ export class PerpsDeltaNeutralCommand {
   }): Promise<void> {
     const signer = await Signer.load(opts.key ?? Config.load().activeKey);
     const user = address(signer.address);
-    const [state, config, existing] = await Promise.all([
-      DeltaNeutralVault.getState(),
+    const [state, config] = await Promise.all([
+      DeltaNeutralVault.load(user),
       NeutralTradeClient.getConfig(VAULT_ID),
-      DeltaNeutralVault.getUser(user),
     ]);
     const { bundle } = state;
     const amount = BigInt(
@@ -256,7 +253,7 @@ export class PerpsDeltaNeutralCommand {
         user,
         bundle,
         amount,
-        existing !== null
+        state.user !== null
       )
     );
     await this.submit(signer, transaction, {
@@ -272,11 +269,11 @@ export class PerpsDeltaNeutralCommand {
   }): Promise<void> {
     const signer = await Signer.load(opts.key ?? Config.load().activeKey);
     const user = address(signer.address);
-    const [state, config, existing] = await Promise.all([
-      DeltaNeutralVault.getState(),
+    const [state, config] = await Promise.all([
+      DeltaNeutralVault.load(user),
       NeutralTradeClient.getConfig(VAULT_ID),
-      DeltaNeutralVault.getUser(user),
     ]);
+    const existing = state.user;
     if (!existing || existing.shares === 0n) {
       throw new Error("No delta neutral vault balance to withdraw.");
     }

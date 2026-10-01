@@ -191,24 +191,25 @@ export const userAccountAddress = (user: Address) =>
   pda("USER_BUNDLE", user, VAULT);
 
 export class DeltaNeutralVault {
-  static async #fetch(account: Address): Promise<Uint8Array | null> {
-    const { value } = await createSolanaRpc(Rpc.url)
-      .getAccountInfo(account, { encoding: "base64" })
-      .send();
-    return value ? Buffer.from(value.data[0], "base64") : null;
-  }
-
-  // TVL and price per share computed like the web's getVaultAccount:
+  // Vault state plus, when `user` is given, their account, in one RPC call.
+  // TVL and price per share are computed like the web's getVaultAccount:
   // on-chain balance plus the oracle's external equity, over total shares.
-  public static async getState(): Promise<{
+  public static async load(user?: Address): Promise<{
     bundle: Bundle;
     tvl: number;
     pps: number;
+    user: UserBundle | null;
   }> {
-    const [bundleData, oracleData] = await Promise.all([
-      this.#fetch(VAULT),
-      this.#fetch(await pda("ORACLE", VAULT)),
-    ]);
+    const accounts = [VAULT, await pda("ORACLE", VAULT)];
+    if (user) {
+      accounts.push(await userAccountAddress(user));
+    }
+    const { value } = await createSolanaRpc(Rpc.url)
+      .getMultipleAccounts(accounts, { encoding: "base64" })
+      .send();
+    const [bundleData, oracleData, userData] = value.map((a) =>
+      a ? Buffer.from(a.data[0], "base64") : null
+    );
     if (!bundleData || !oracleData) {
       throw new Error("Delta neutral vault account not found.");
     }
@@ -219,12 +220,12 @@ export class DeltaNeutralVault {
         bundle.bundleUnderlyingBalance + decodeOracleExternalEquity(oracleData)
       ) / scale;
     const shares = Number(bundle.totalShares) / scale;
-    return { bundle, tvl, pps: shares === 0 ? 1 : tvl / shares };
-  }
-
-  public static async getUser(user: Address): Promise<UserBundle | null> {
-    const data = await this.#fetch(await userAccountAddress(user));
-    return data ? decodeUserBundle(data) : null;
+    return {
+      bundle,
+      tvl,
+      pps: shares === 0 ? 1 : tvl / shares,
+      user: userData ? decodeUserBundle(userData) : null,
+    };
   }
 
   public static async depositInstructions(
