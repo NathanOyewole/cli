@@ -145,6 +145,8 @@ Two sizing modes — provide either `--leverage` or `--size`, not both:
 - `--leverage`: position size = amount × leverage
 - `--size`: explicit position size in USD, leverage is derived
 
+Opening on an existing position first settles its accrued borrow fees out of the deposit. If the deposit is too small to add any size, the CLI refuses instead of signing.
+
 ```bash
 # Market order with leverage
 jup perps open --asset SOL --side long --amount 10 --input USDC --leverage 2
