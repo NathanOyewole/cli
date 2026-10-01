@@ -211,12 +211,9 @@ const tcgKy = ClientConfig.ky.extend({
   timeout: 60_000,
 });
 
-// jup.ag forwards these to Collector Crypt with its own key, so the user's
-// Jupiter API key must not ride along.
 const proxyKy = ClientConfig.ky.extend({
   prefixUrl: "https://jup.ag/api/gacha",
   timeout: 60_000,
-  headers: { "x-api-key": undefined },
 });
 
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });

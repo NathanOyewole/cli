@@ -106,7 +106,6 @@ export class PortfolioClient {
   });
   static readonly #datapi = ClientConfig.ky.extend({
     prefixUrl: "https://datapi.jup.ag/v1",
-    headers: { "x-api-key": undefined },
   });
 
   public static async getPositions(address: string): Promise<PositionsResult> {

@@ -34,7 +34,6 @@ export class DepositClient {
   static readonly #ky = ClientConfig.ky.extend({
     prefixUrl: "https://jup.ag/api",
     timeout: 30_000,
-    headers: { "x-api-key": undefined },
   });
 
   public static async getDepositAddresses(

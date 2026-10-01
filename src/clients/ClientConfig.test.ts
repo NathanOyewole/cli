@@ -29,3 +29,18 @@ describe("ClientConfig.ky", () => {
     ).rejects.toThrow("Rate limited by the Jupiter API.");
   });
 });
+
+describe("ClientConfig.sendsApiKey", () => {
+  test("sends the key only to api.jup.ag", () => {
+    expect(
+      [
+        "https://api.jup.ag/ultra/v1/order",
+        "https://lite-api.jup.ag/ultra/v1/order",
+        "https://datapi.jup.ag/v1/assets/search",
+        "https://api.solana.fluid.io/v2/lending/tokens",
+        "https://gum-api.jup.net/fe/mainnet-beta/perps/markets",
+        "https://jup.ag/api/gacha/marketplace",
+      ].map((url) => ClientConfig.sendsApiKey(url))
+    ).toEqual([true, false, false, false, false, false]);
+  });
+});

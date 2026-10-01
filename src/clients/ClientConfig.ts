@@ -9,14 +9,22 @@ export class ClientConfig {
     ? "https://api.jup.ag"
     : "https://lite-api.jup.ag";
 
+  // Only api.jup.ag uses the key; other hosts (datapi, perps-api, third-party
+  // indexers) must never receive it.
+  public static sendsApiKey(url: string): boolean {
+    return new URL(url).hostname === "api.jup.ag";
+  }
+
   public static readonly ky = ky.create({
-    headers: {
-      "x-client-platform": "jupiter.cli",
-      ...(this.#API_KEY && {
-        "x-api-key": this.#API_KEY,
-      }),
-    },
+    headers: { "x-client-platform": "jupiter.cli" },
     hooks: {
+      beforeRequest: [
+        (request) => {
+          if (this.#API_KEY && this.sendsApiKey(request.url)) {
+            request.headers.set("x-api-key", this.#API_KEY);
+          }
+        },
+      ],
       afterResponse: [
         (_request, _options, response) => {
           if (response.status === 429) {

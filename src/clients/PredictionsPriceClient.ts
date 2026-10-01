@@ -12,7 +12,6 @@ export type OrderbookSnapshot = {
 export class PredictionsPriceClient {
   static readonly #ky = ClientConfig.ky.extend({
     prefixUrl: `https://${HOST}`,
-    headers: { "x-api-key": undefined },
   });
 
   public static async getCryptoPrice(
