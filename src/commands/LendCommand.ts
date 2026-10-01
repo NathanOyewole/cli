@@ -1,12 +1,27 @@
 import type { Command } from "commander";
+import type { Instruction } from "@solana/kit";
 
-import { DatapiClient } from "../clients/DatapiClient.ts";
-import { LendClient, type LendToken } from "../clients/LendClient.ts";
+import { FluidClient } from "../clients/FluidClient.ts";
+import {
+  LendClient,
+  type EarnAction,
+  type LendMarket,
+  type LendToken,
+} from "../clients/LendClient.ts";
 import { Config } from "../lib/Config.ts";
+import { LendMath } from "../lib/LendMath.ts";
+import { LendOptions } from "../lib/LendOptions.ts";
+import { LendTx } from "../lib/LendTx.ts";
 import { NumberConverter } from "../lib/NumberConverter.ts";
 import { Output } from "../lib/Output.ts";
 import { Signer } from "../lib/Signer.ts";
 import { Swap } from "../lib/Swap.ts";
+import { LendBorrowCommand } from "./LendBorrowCommand.ts";
+import { LendToolsCommand } from "./LendToolsCommand.ts";
+
+const EARN_COMPUTE_UNITS = 300_000;
+
+type MarketOpts = { market: LendMarket };
 
 export class LendCommand {
   public static register(program: Command): void {
@@ -19,10 +34,12 @@ export class LendCommand {
     earn
       .command("tokens")
       .description("View tokens available for lending with APY")
-      .action(() => this.tokens());
+      .addOption(LendOptions.market())
+      .action((opts) => this.tokens(opts));
     earn
       .command("positions")
       .description("View lending positions with earnings")
+      .addOption(LendOptions.market())
       .option("--key <name>", "Key to use (overrides active key)")
       .option("--address <address>", "Wallet address to look up")
       .option("--token <token>", "Filter by token (symbol or mint address)")
@@ -39,6 +56,7 @@ export class LendCommand {
         "--raw-amount <n>",
         "Amount in on-chain units (no decimal conversion)"
       )
+      .addOption(LendOptions.market())
       .option("--key <name>", "Key to use for signing")
       .action((opts) => this.deposit(opts));
     earn
@@ -51,14 +69,38 @@ export class LendCommand {
       .option("--amount <n>", "Amount in human-readable units")
       .option(
         "--raw-amount <n>",
-        "Amount in on-chain units (no decimal conversion)"
+        "Amount of jlToken shares in on-chain units (no decimal conversion)"
       )
+      .addOption(LendOptions.market())
       .option("--key <name>", "Key to use for signing")
       .action((opts) => this.withdraw(opts));
+    earn
+      .command("history")
+      .description("View lending deposit and withdrawal history")
+      .addOption(LendOptions.market())
+      .option("--key <name>", "Key to use (overrides active key)")
+      .option("--address <address>", "Wallet address to look up")
+      .option("--token <token>", "Filter by token (symbol or mint address)")
+      .option(
+        "--type <type>",
+        "Filter by type: deposit, withdraw, transfer, mint, redeem"
+      )
+      .option("--page <n>", "Page number (10 entries per page)", "1")
+      .action((opts) => this.history(opts));
+    earn
+      .command("chart")
+      .description("View a lending token's historical APY and exchange rate")
+      .requiredOption("--token <token>", "Token (symbol or mint address)")
+      .option("--range <range>", "Time range: 1d, 7d, 30d, 1y", "7d")
+      .addOption(LendOptions.market())
+      .action((opts) => this.chart(opts));
+
+    LendBorrowCommand.register(lend);
+    LendToolsCommand.register(lend);
   }
 
-  private static async tokens(): Promise<void> {
-    const lendTokens = await LendClient.getTokens();
+  private static async tokens(opts: MarketOpts): Promise<void> {
+    const lendTokens = await LendClient.getTokens(opts.market);
 
     const tokens = lendTokens.map((lt) => {
       const price = Number(lt.asset.price);
@@ -73,11 +115,7 @@ export class LendCommand {
           )
         ) * price;
       return {
-        token: {
-          id: lt.assetAddress,
-          symbol: lt.asset.symbol,
-          decimals: lt.asset.decimals,
-        },
+        token: this.tokenInfo(lt),
         jlToken: {
           id: lt.address,
           symbol: lt.symbol,
@@ -114,24 +152,16 @@ export class LendCommand {
     });
   }
 
-  private static async positions(opts: {
-    key?: string;
-    address?: string;
-    token?: string;
-  }): Promise<void> {
-    if (opts.address && opts.key) {
-      throw new Error("Only one of --address or --key can be provided.");
-    }
+  private static async positions(
+    opts: MarketOpts & { key?: string; address?: string; token?: string }
+  ): Promise<void> {
+    const address = await LendOptions.resolveAddress(opts);
 
-    const address =
-      opts.address ??
-      (await Signer.loadAddress(opts.key ?? Config.load().activeKey));
-
-    const allPositions = await LendClient.getPositions(address);
+    const allPositions = await LendClient.getPositions(address, opts.market);
     let activePositions = allPositions.filter((p) => p.shares !== "0");
 
     if (opts.token) {
-      const filter = opts.token.toLowerCase();
+      const filter = this.normalizeSymbol(opts.token);
       activePositions = activePositions.filter(
         (p) =>
           p.token.asset.symbol.toLowerCase() === filter ||
@@ -147,10 +177,10 @@ export class LendCommand {
       throw new Error("No active lending positions found.");
     }
 
-    const jlAddresses = activePositions.map((p) => p.token.address).join(",");
     const earnings = await LendClient.getEarnings({
       user: address,
-      positions: jlAddresses,
+      positions: activePositions.map((p) => p.token.address).join(","),
+      market: opts.market,
     });
     const earningsMap = new Map(earnings.map((e) => [e.address, e.earnings]));
 
@@ -162,19 +192,15 @@ export class LendCommand {
           p.token.asset.decimals
         )
       );
-      const rawEarnings = earningsMap.get(p.token.assetAddress) ?? 0;
+      const rawEarnings = earningsMap.get(p.token.address) ?? 0;
       const earningsAmount = Number(
         NumberConverter.fromChainAmount(
-          rawEarnings.toString(),
+          BigInt(rawEarnings).toString(),
           p.token.asset.decimals
         )
       );
       return {
-        token: {
-          id: p.token.assetAddress,
-          symbol: p.token.asset.symbol,
-          decimals: p.token.asset.decimals,
-        },
+        token: this.tokenInfo(p.token),
         jlToken: {
           id: p.token.address,
           symbol: p.token.symbol,
@@ -204,93 +230,88 @@ export class LendCommand {
       rows: positions.map((p) => ({
         token: p.token.symbol,
         apy: Output.formatPercentageChange(p.apyPct),
-        position: `${p.positionAmount.toLocaleString("en-US", { maximumFractionDigits: 6 })} ${p.token.symbol} (${Output.formatDollar(p.positionUsd)})`,
+        position: `${this.formatAmount(p.positionAmount)} ${p.token.symbol} (${Output.formatDollar(p.positionUsd)})`,
         earnings: Output.formatDollarChange(p.earningsUsd),
       })),
     });
   }
 
-  private static async deposit(opts: {
-    token: string;
-    amount?: string;
-    rawAmount?: string;
-    key?: string;
-  }): Promise<void> {
+  private static async deposit(
+    opts: MarketOpts & {
+      token: string;
+      amount?: string;
+      rawAmount?: string;
+      key?: string;
+    }
+  ): Promise<void> {
     Swap.validateAmountOpts(opts);
 
-    const lendTokens = await LendClient.getTokens();
+    const lendTokens = await LendClient.getTokens(opts.market);
     const lendToken = this.resolveLendToken(lendTokens, opts.token);
+    const signer = await Signer.load(opts.key ?? Config.load().activeKey);
 
-    const settings = Config.load();
-    const [signer, inputToken, outputToken] = await Promise.all([
-      Signer.load(opts.key ?? settings.activeKey),
-      DatapiClient.resolveToken(lendToken.assetAddress),
-      DatapiClient.resolveToken(lendToken.address),
-    ]);
-
-    const swap = await Swap.execute({
-      signer,
-      inputToken,
-      outputToken,
-      amount: opts.amount,
-      rawAmount: opts.rawAmount,
+    const rawAmount =
+      opts.rawAmount ??
+      NumberConverter.toChainAmount(opts.amount!, lendToken.asset.decimals);
+    const transaction = await this.buildEarnTx({
+      action: "deposit",
+      signer: signer.address,
+      lendToken,
+      market: opts.market,
+      amount: rawAmount,
     });
 
+    const price = Number(lendToken.asset.price);
+    const depositedAmount = NumberConverter.fromChainAmount(
+      rawAmount,
+      lendToken.asset.decimals
+    );
+    const depositedUsd = Number(depositedAmount) * price;
     const apyPct = this.rateToPct(lendToken.totalRate);
 
     if (Config.dryRun) {
       if (Output.isJson()) {
         Output.json({
           dryRun: true,
-          token: {
-            id: lendToken.assetAddress,
-            symbol: lendToken.asset.symbol,
-            decimals: lendToken.asset.decimals,
-          },
-          depositedAmount: swap.inAmount,
-          depositedUsd: swap.order.inUsdValue,
+          token: this.tokenInfo(lendToken),
+          depositedAmount,
+          depositedUsd,
           apyPct,
           signature: null,
-          transaction: swap.order.transaction,
+          transaction,
         });
         return;
       }
-
       console.log(Output.DRY_RUN_LABEL);
       Output.table({
         type: "vertical",
         rows: [
           {
-            label: "Deposited",
-            value: `${swap.inAmount} ${lendToken.asset.symbol} (${Output.formatDollar(swap.order.inUsdValue)})`,
+            label: "Deposit",
+            value: `${depositedAmount} ${lendToken.asset.symbol} (${Output.formatDollar(depositedUsd)})`,
           },
-          {
-            label: "APY",
-            value: Output.formatPercentageChange(apyPct),
-          },
+          { label: "APY", value: Output.formatPercentageChange(apyPct) },
         ],
       });
       return;
     }
 
-    const { positionAmount, price } = await this.fetchCurrentPosition(
+    const signature = await LendTx.signAndSend(signer, transaction);
+    const positionAmount = await this.fetchPositionAmount(
       signer.address,
-      lendToken
+      lendToken,
+      opts.market
     );
 
     if (Output.isJson()) {
       Output.json({
-        token: {
-          id: lendToken.assetAddress,
-          symbol: lendToken.asset.symbol,
-          decimals: lendToken.asset.decimals,
-        },
-        depositedAmount: swap.inAmount,
-        depositedUsd: swap.order.inUsdValue,
+        token: this.tokenInfo(lendToken),
+        depositedAmount,
+        depositedUsd,
         positionAmount,
         positionUsd: positionAmount * price,
         apyPct,
-        signature: swap.result!.signature,
+        signature,
       });
       return;
     }
@@ -300,45 +321,40 @@ export class LendCommand {
       rows: [
         {
           label: "Deposited",
-          value: `${swap.inAmount} ${lendToken.asset.symbol} (${Output.formatDollar(swap.order.inUsdValue)})`,
+          value: `${depositedAmount} ${lendToken.asset.symbol} (${Output.formatDollar(depositedUsd)})`,
         },
         {
           label: "Position",
-          value: `${positionAmount.toLocaleString("en-US", { maximumFractionDigits: 6 })} ${lendToken.asset.symbol} (${Output.formatDollar(positionAmount * price)})`,
+          value: `${this.formatAmount(positionAmount)} ${lendToken.asset.symbol} (${Output.formatDollar(positionAmount * price)})`,
         },
-        {
-          label: "APY",
-          value: Output.formatPercentageChange(apyPct),
-        },
-        {
-          label: "Tx Signature",
-          value: swap.result!.signature,
-        },
+        { label: "APY", value: Output.formatPercentageChange(apyPct) },
+        { label: "Tx Signature", value: signature },
       ],
     });
   }
 
-  private static async withdraw(opts: {
-    token: string;
-    amount?: string;
-    rawAmount?: string;
-    key?: string;
-  }): Promise<void> {
+  private static async withdraw(
+    opts: MarketOpts & {
+      token: string;
+      amount?: string;
+      rawAmount?: string;
+      key?: string;
+    }
+  ): Promise<void> {
     if (opts.amount && opts.rawAmount) {
       throw new Error("Only one of --amount or --raw-amount can be provided.");
     }
 
-    const lendTokens = await LendClient.getTokens();
+    const lendTokens = await LendClient.getTokens(opts.market);
     const lendToken = this.resolveLendToken(lendTokens, opts.token);
+    const signer = await Signer.load(opts.key ?? Config.load().activeKey);
 
-    const settings = Config.load();
-    const signer = await Signer.load(opts.key ?? settings.activeKey);
-
-    let rawAmount = opts.rawAmount;
-
-    if (!opts.amount && !opts.rawAmount) {
-      // Withdraw entire position — use full shares balance
-      const positions = await LendClient.getPositions(signer.address);
+    let shares = opts.rawAmount;
+    if (!opts.amount && !shares) {
+      const positions = await LendClient.getPositions(
+        signer.address,
+        opts.market
+      );
       const position = positions.find(
         (p) => p.token.address === lendToken.address
       );
@@ -347,86 +363,82 @@ export class LendCommand {
           `No lending position found for ${lendToken.asset.symbol}.`
         );
       }
-      rawAmount = position.shares;
-    } else if (opts.amount) {
-      // Convert underlying amount to jlToken amount using convertToShares
-      const chainAmount = NumberConverter.toChainAmount(
-        opts.amount,
-        lendToken.asset.decimals
+      shares = position.shares;
+    }
+    const withdrawnRaw = opts.amount
+      ? BigInt(
+          NumberConverter.toChainAmount(opts.amount, lendToken.asset.decimals)
+        )
+      : (BigInt(shares!) * BigInt(lendToken.convertToAssets)) /
+        10n ** BigInt(lendToken.decimals);
+
+    const withdrawable = BigInt(lendToken.liquiditySupplyData.withdrawable);
+    if (withdrawnRaw > withdrawable) {
+      throw new Error(
+        `Only ${NumberConverter.fromChainAmount(withdrawable, lendToken.asset.decimals)} ${lendToken.asset.symbol} is withdrawable right now (protocol withdrawal limit). Withdraw a smaller --amount.`
       );
-      const shares =
-        (BigInt(chainAmount) * BigInt(lendToken.convertToShares)) /
-        BigInt(10 ** lendToken.decimals);
-      rawAmount = shares.toString();
     }
 
-    const [inputToken, outputToken] = await Promise.all([
-      DatapiClient.resolveToken(lendToken.address),
-      DatapiClient.resolveToken(lendToken.assetAddress),
-    ]);
-
-    const swap = await Swap.execute({
-      signer,
-      inputToken,
-      outputToken,
-      rawAmount,
+    const transaction = await this.buildEarnTx({
+      signer: signer.address,
+      lendToken,
+      market: opts.market,
+      ...(opts.amount
+        ? { action: "withdraw", amount: withdrawnRaw.toString() }
+        : { action: "redeem", shares: shares! }),
     });
 
+    const price = Number(lendToken.asset.price);
+    const withdrawnAmount = NumberConverter.fromChainAmount(
+      withdrawnRaw,
+      lendToken.asset.decimals
+    );
+    const withdrawnUsd = Number(withdrawnAmount) * price;
     const apyPct = this.rateToPct(lendToken.totalRate);
 
     if (Config.dryRun) {
       if (Output.isJson()) {
         Output.json({
           dryRun: true,
-          token: {
-            id: lendToken.assetAddress,
-            symbol: lendToken.asset.symbol,
-            decimals: lendToken.asset.decimals,
-          },
-          withdrawnAmount: swap.outAmount,
-          withdrawnUsd: swap.order.outUsdValue,
+          token: this.tokenInfo(lendToken),
+          withdrawnAmount,
+          withdrawnUsd,
           apyPct,
           signature: null,
-          transaction: swap.order.transaction,
+          transaction,
         });
         return;
       }
-
       console.log(Output.DRY_RUN_LABEL);
       Output.table({
         type: "vertical",
         rows: [
           {
-            label: "Withdrawn",
-            value: `${swap.outAmount} ${lendToken.asset.symbol} (${Output.formatDollar(swap.order.outUsdValue)})`,
+            label: "Withdraw",
+            value: `${withdrawnAmount} ${lendToken.asset.symbol} (${Output.formatDollar(withdrawnUsd)})`,
           },
-          {
-            label: "APY",
-            value: Output.formatPercentageChange(apyPct),
-          },
+          { label: "APY", value: Output.formatPercentageChange(apyPct) },
         ],
       });
       return;
     }
 
-    const { positionAmount, price } = await this.fetchCurrentPosition(
+    const signature = await LendTx.signAndSend(signer, transaction);
+    const positionAmount = await this.fetchPositionAmount(
       signer.address,
-      lendToken
+      lendToken,
+      opts.market
     );
 
     if (Output.isJson()) {
       Output.json({
-        token: {
-          id: lendToken.assetAddress,
-          symbol: lendToken.asset.symbol,
-          decimals: lendToken.asset.decimals,
-        },
-        withdrawnAmount: swap.outAmount,
-        withdrawnUsd: swap.order.outUsdValue,
+        token: this.tokenInfo(lendToken),
+        withdrawnAmount,
+        withdrawnUsd,
         positionAmount,
         positionUsd: positionAmount * price,
         apyPct,
-        signature: swap.result!.signature,
+        signature,
       });
       return;
     }
@@ -436,34 +448,193 @@ export class LendCommand {
       rows: [
         {
           label: "Withdrawn",
-          value: `${swap.outAmount} ${lendToken.asset.symbol} (${Output.formatDollar(swap.order.outUsdValue)})`,
+          value: `${withdrawnAmount} ${lendToken.asset.symbol} (${Output.formatDollar(withdrawnUsd)})`,
         },
         {
           label: "Position",
-          value: `${positionAmount.toLocaleString("en-US", { maximumFractionDigits: 6 })} ${lendToken.asset.symbol} (${Output.formatDollar(positionAmount * price)})`,
+          value: `${this.formatAmount(positionAmount)} ${lendToken.asset.symbol} (${Output.formatDollar(positionAmount * price)})`,
         },
-        {
-          label: "APY",
-          value: Output.formatPercentageChange(apyPct),
-        },
-        {
-          label: "Tx Signature",
-          value: swap.result!.signature,
-        },
+        { label: "APY", value: Output.formatPercentageChange(apyPct) },
+        { label: "Tx Signature", value: signature },
       ],
     });
   }
 
-  private static async fetchCurrentPosition(
+  private static async history(
+    opts: MarketOpts & {
+      key?: string;
+      address?: string;
+      token?: string;
+      type?: string;
+      page: string;
+    }
+  ): Promise<void> {
+    const address = await LendOptions.resolveAddress(opts);
+    const page = Math.max(1, LendOptions.positiveInt("--page", opts.page));
+    const lendTokens = await LendClient.getTokens(opts.market);
+    const ftoken = opts.token
+      ? this.resolveLendToken(lendTokens, opts.token).address
+      : undefined;
+
+    const res = await FluidClient.getEarnHistory(opts.market, address, {
+      page,
+      type: opts.type,
+      ftoken,
+    });
+    const byJlToken = new Map(lendTokens.map((lt) => [lt.address, lt]));
+
+    const history = res.data.map((a) => {
+      const lt = byJlToken.get(a.ftoken);
+      const decimals = lt?.asset.decimals ?? 0;
+      return {
+        time: a.createdAt,
+        type: a.type,
+        token: lt
+          ? this.tokenInfo(lt)
+          : { id: a.asset, symbol: null, decimals: null },
+        amount: lt
+          ? Number(NumberConverter.fromChainAmount(a.assetAmount, decimals))
+          : null,
+        amountUsd: a.assetAmountUsd === null ? null : Number(a.assetAmountUsd),
+        status: a.status,
+        signature: a.signature,
+      };
+    });
+    const next = page < res.meta.lastPage ? page + 1 : undefined;
+
+    if (Output.isJson()) {
+      Output.json({ count: res.meta.total, history, next });
+      return;
+    }
+
+    Output.table({
+      type: "horizontal",
+      headers: {
+        time: "Time",
+        type: "Type",
+        amount: "Amount",
+        value: "Value",
+        status: "Status",
+        signature: "Tx Signature",
+      },
+      rows: history.map((h) => ({
+        time: new Date(h.time).toLocaleString(),
+        type: h.type,
+        amount: `${h.amount === null ? "?" : this.formatAmount(h.amount)} ${h.token.symbol ?? ""}`,
+        value: Output.formatDollar(h.amountUsd ?? undefined),
+        status: h.status,
+        signature: h.signature,
+      })),
+    });
+    if (next) {
+      console.log(`Page ${page} of ${res.meta.lastPage}. Next: --page ${next}`);
+    }
+  }
+
+  private static async chart(
+    opts: MarketOpts & { token: string; range: string }
+  ): Promise<void> {
+    if (!["1d", "7d", "30d", "1y"].includes(opts.range)) {
+      throw new Error("--range must be one of 1d, 7d, 30d, 1y.");
+    }
+    const lendTokens = await LendClient.getTokens(opts.market);
+    const lendToken = this.resolveLendToken(lendTokens, opts.token);
+    const raw = await FluidClient.getExchangePriceChart(
+      opts.market,
+      lendToken.address,
+      opts.range
+    );
+    const points = LendMath.exchangePriceApys(raw);
+
+    if (Output.isJson()) {
+      Output.json({
+        token: this.tokenInfo(lendToken),
+        range: opts.range,
+        points,
+      });
+      return;
+    }
+
+    const step = Math.max(1, Math.ceil(points.length / 24));
+    Output.table({
+      type: "horizontal",
+      headers: {
+        time: "Time",
+        apy: "APY",
+        base: "Supply APY",
+        rate: `${lendToken.symbol}/${lendToken.asset.symbol}`,
+      },
+      rows: points
+        .filter((_, i) => i % step === 0 || i === points.length - 1)
+        .map((p) => ({
+          time: new Date(p.time).toLocaleString(),
+          apy: Output.formatPercentageChange(p.apyPct),
+          base: Output.formatPercentageChange(p.baseApyPct),
+          rate: p.exchangeRate.toFixed(6),
+        })),
+    });
+  }
+
+  private static async buildEarnTx(
+    req: {
+      action: EarnAction;
+      signer: string;
+      lendToken: LendToken;
+      market: LendMarket;
+    } & ({ amount: string } | { shares: string })
+  ): Promise<string> {
+    const { action, signer, lendToken, market } = req;
+    const asset = lendToken.assetAddress;
+    const isSol = asset === LendTx.WSOL_MINT;
+    const value: { amount: string } | { shares: string } =
+      "amount" in req ? { amount: req.amount } : { shares: req.shares };
+
+    const [{ instructions }, programs] = await Promise.all([
+      LendClient.postEarnInstructions(action, {
+        asset,
+        signer,
+        market,
+        ...value,
+      }),
+      LendTx.tokenPrograms([asset, lendToken.address]),
+    ]);
+    const assetProgram = programs.get(asset)!;
+    const isEntry = action === "deposit" || action === "mint";
+
+    const ixs: Instruction[] = [...LendTx.computeBudget(EARN_COMPUTE_UNITS)];
+    if (isEntry) {
+      ixs.push(
+        await LendTx.createAta(
+          signer,
+          lendToken.address,
+          programs.get(lendToken.address)!
+        )
+      );
+      if (isSol && "amount" in value) {
+        ixs.push(
+          ...(await LendTx.wrapSol(signer, BigInt(value.amount), assetProgram))
+        );
+      }
+    } else {
+      ixs.push(await LendTx.createAta(signer, asset, assetProgram));
+    }
+    ixs.push(...instructions.map(LendTx.fromApi));
+    if (isSol) {
+      ixs.push(await LendTx.unwrapSol(signer, assetProgram));
+    }
+    return LendTx.compile(signer, ixs);
+  }
+
+  private static async fetchPositionAmount(
     address: string,
-    lendToken: LendToken
-  ): Promise<{ positionAmount: number; price: number }> {
-    const positions = await LendClient.getPositions(address);
+    lendToken: LendToken,
+    market: LendMarket
+  ): Promise<number> {
+    const positions = await LendClient.getPositions(address, market);
     const position = positions.find(
       (p) => p.token.address === lendToken.address
     );
-    const price = Number(lendToken.asset.price);
-    const positionAmount = position
+    return position
       ? Number(
           NumberConverter.fromChainAmount(
             position.underlyingAssets,
@@ -471,14 +642,26 @@ export class LendCommand {
           )
         )
       : 0;
-    return { positionAmount, price };
+  }
+
+  private static tokenInfo(lt: LendToken) {
+    return {
+      id: lt.assetAddress,
+      symbol: lt.asset.symbol,
+      decimals: lt.asset.decimals,
+    };
+  }
+
+  private static normalizeSymbol(input: string): string {
+    const query = input.toLowerCase();
+    return query === "sol" ? "wsol" : query;
   }
 
   private static resolveLendToken(
     lendTokens: LendToken[],
     input: string
   ): LendToken {
-    const query = input.toLowerCase();
+    const query = this.normalizeSymbol(input);
     const match = lendTokens.find(
       (lt) =>
         lt.asset.symbol.toLowerCase() === query ||
@@ -493,6 +676,10 @@ export class LendCommand {
       );
     }
     return match;
+  }
+
+  private static formatAmount(n: number): string {
+    return n.toLocaleString("en-US", { maximumFractionDigits: 6 });
   }
 
   private static rateToPct(rate: string): number {

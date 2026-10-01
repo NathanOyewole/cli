@@ -1,13 +1,18 @@
 # Lending
 
-Requires: an active key for `deposit` and `withdraw` commands. See [setup](setup.md).
+Requires: an active key for write commands. See [setup](setup.md).
 
-## Commands
+Jupiter Lend has two markets: `main` (default) and `ethena` (Ethena x Bitwise, jle* tokens). Every `lend` command accepts `--market main|ethena`.
+
+Write commands build the transaction from Jupiter Lend instructions (`lite-api.jup.ag/lend/v1`), sign it locally and send it to your RPC (`jup config set --rpc-url <url>`). `--dry-run` returns the unsigned base64 `transaction` instead.
+
+## Earn
 
 ### View available tokens
 
 ```bash
 jup lend earn tokens
+jup lend earn tokens --market ethena
 ```
 
 - Shows all tokens available for lending with APY, TVL, and withdrawable liquidity
@@ -37,6 +42,7 @@ jup lend earn positions
 jup lend earn positions --key mykey
 jup lend earn positions --address <wallet-address>
 jup lend earn positions --token USDC
+jup lend earn positions --market ethena
 ```
 
 - With no options, uses the active key's wallet
@@ -67,9 +73,11 @@ jup lend earn deposit --token USDC --amount 100
 jup lend earn deposit --token SOL --amount 1.5 --key mykey
 jup lend earn deposit --token USDC --raw-amount 100000000
 jup lend earn deposit --token USDC --amount 100 --dry-run
+jup lend earn deposit --market ethena --token PYUSD --amount 100
 ```
 
-- `--token` (required) — underlying token to deposit (symbol or mint address)
+- Deposits directly into the lending pool (no swap). Native SOL is wrapped and unwrapped in the same transaction.
+- `--token` (required) — underlying token to deposit (symbol or mint address; `SOL` means WSOL)
 - `--amount` uses human-readable units (e.g. `100` USDC = 100 USDC)
 - `--raw-amount` uses on-chain units (e.g. `100000000` = 100 USDC)
 - Exactly one of `--amount` or `--raw-amount` is required
@@ -101,8 +109,9 @@ jup lend earn withdraw --token USDC --amount 50 --dry-run
 
 - `--token` (required) — token to withdraw (accepts underlying symbol/address or jlToken symbol/address)
 - `--amount` in human-readable units of the underlying token
-- `--raw-amount` in on-chain units of the jlToken
-- When neither `--amount` nor `--raw-amount` is provided, withdraws the entire position
+- `--raw-amount` in on-chain units of the jlToken (redeems that many shares)
+- When neither `--amount` nor `--raw-amount` is provided, redeems the entire position
+- Fails early when the amount exceeds the pool's currently withdrawable liquidity (protocol withdrawal limit)
 - `--key` overrides the active key for this transaction
 - `--dry-run` previews the withdrawal without signing. JSON response includes the unsigned base64 `transaction`.
 
@@ -116,6 +125,62 @@ jup lend earn withdraw --token USDC --amount 50 --dry-run
   "positionUsd": 975.30, // remaining position USD value
   "apyPct": 5.97, // current APY; 5.97 means 5.97%
   "signature": "5YhT...9AKU" // tx signature
+}
+```
+
+### History
+
+```bash
+jup lend earn history
+jup lend earn history --address <wallet-address> --token USDC --type deposit
+jup lend earn history --page 2
+```
+
+- `--type` filters by `deposit`, `withdraw`, `transfer`, `mint` or `redeem`
+- 10 entries per page; use `next` from the response as the next `--page`
+
+```js
+// Example JSON response:
+{
+  "count": 59, // total entries
+  "history": [
+    {
+      "time": "2026-09-30T14:01:40.000+00:00",
+      "type": "deposit",
+      "token": { "id": "EPjF...USDC", "symbol": "USDC", "decimals": 6 },
+      "amount": 360000.0015, // underlying token units
+      "amountUsd": 359947.33, // USD value at the time; null if unknown
+      "status": "success",
+      "signature": "5zeF...VVAp"
+    }
+  ],
+  "next": 2 // next page; omitted on the last page
+}
+```
+
+### APY chart
+
+```bash
+jup lend earn chart --token USDC
+jup lend earn chart --token USDC --range 30d
+```
+
+- `--range` is `1d`, `7d` (default), `30d` or `1y`
+- APYs are annualized from the change in exchange price between points, as on jup.ag
+
+```js
+// Example JSON response:
+{
+  "token": { "id": "EPjF...USDC", "symbol": "USDC", "decimals": 6 },
+  "range": "7d",
+  "points": [
+    {
+      "time": "2026-09-30T08:00:00.000Z",
+      "apyPct": 6.23, // total APY including rewards
+      "baseApyPct": 5.84, // supply APY only
+      "exchangeRate": 1.062274 // underlying tokens per jlToken
+    }
+  ]
 }
 ```
 
