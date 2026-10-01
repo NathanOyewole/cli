@@ -84,6 +84,8 @@ jup vrfd submit --token <mint-address> --project-twitter @projecthandle --descri
 - [Perps](docs/perps.md): Perps trading (leveraged longs/shorts)
 - [Lend](docs/lend.md): Lending and yield farming
 - [Predictions](docs/predictions.md): Prediction markets
+- [Rewards](docs/rewards.md): Reward campaigns, rankings, progress and claims
+- [Gacha](docs/gacha.md): Gacha packs, collectible cards, marketplace and shipping
 - [Vrfd](docs/vrfd.md): Token verification
 
 ## Changelog

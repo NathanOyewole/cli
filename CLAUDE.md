@@ -24,15 +24,17 @@ bun run ci
 
 ## Architecture
 
-**Entry point:** `src/index.ts` — initializes config, registers 9 command groups with Commander.
+**Entry point:** `src/index.ts` — initializes config, registers 11 command groups with Commander.
 
 **Commands** (`src/commands/`): Static classes that register subcommands. Each delegates to library modules.
 
 - `ConfigCommand` — `config list`, `config set`
+- `GachaCommand` — `gacha packs/open/gift/buyback/collection/activity/verify/winners/leaderboard`; registers `GachaMarketCommand` (`gacha marketplace/card/buy/list/delist`) and `GachaShippingCommand` (`gacha shipping/ship`)
 - `KeysCommand` — `keys list/add/delete/edit/use/solana-import`
 - `LendCommand` — `lend earn tokens/positions/deposit/withdraw`
 - `PerpsCommand` — `perps positions/markets/open/set/close`
 - `PredictionsCommand` — `predictions events/positions/open/close/history`
+- `RewardsCommand` — `rewards campaigns/leaderboard/progress/unclaimed/claim/apply`
 - `SignCommand` — `sign --tx <base64>`
 - `SpotCommand` — `spot tokens/quote/swap/portfolio/transfer/reclaim`
 - `UpdateCommand` — `update` (self-update CLI to latest version)
@@ -42,11 +44,13 @@ bun run ci
 
 - `Asset` — token metadata (mint addresses, decimals) for SOL, BTC, ETH, USDC; `resolveAsset()` for name lookup
 - `Config` — manages `~/.config/jup/settings.json` (activeKey, output format, API key)
-- `Signer` — loads keypairs from `~/.config/jup/keys/{name}.json`, signs transactions
+- `Signer` — loads keypairs from `~/.config/jup/keys/{name}.json`, signs transactions and messages
 - `KeyPair` — generates/recovers keypairs (BIP39 mnemonics, BIP32 derivation)
 - `Output` — renders data as table (via cli-table3) or JSON based on config; also provides display formatters (`formatDollar`, `formatBoolean`, `formatPercentageChange`)
 - `NumberConverter` — converts between human-readable and on-chain decimal amounts
 - `Swap` — shared swap execution logic used by SpotCommand and LendCommand
+- `RewardsCampaign` — campaign status/claim-window rules and campaign application validation
+- `Gacha` — maps gacha packs, cards and marketplace responses to CLI output
 
 **API Clients** (`src/clients/`):
 
@@ -56,6 +60,8 @@ bun run ci
 - `LendClient` — Jupiter Lend API (earn tokens, positions, earnings)
 - `PredictionsClient` — Jupiter Predictions API v1 (events, positions, orders, history)
 - `VrfdClient` — Jupiter Token Verification API (eligibility check, payment, execute)
+- `RewardsClient` — Jupiter Rewards API on datapi.jup.ag (campaigns, stats, leaderboards, claims) and remote-api.jup.ag campaign applications
+- `GachaClient` — Jupiter TCG API on tcgapi.jup.ag (packs, pulls, gifts, buyback, leaderboard) and the jup.ag Collector Crypt proxy (marketplace, shipping)
 
 **Spot swap flow:** token search → Swap.execute → UltraClient.getOrder → Signer.signTransaction → UltraClient.postExecute
 
@@ -64,6 +70,14 @@ bun run ci
 **Lend deposit/withdraw flow:** LendClient.getTokens → resolve jlToken → Swap.execute → LendClient.getPositions (updated state)
 
 **Predictions flow:** PredictionsClient.postOrder → Signer.signTransaction → PredictionsClient.postExecute
+
+**Rewards claim flow:** RewardsClient.getClaimTransaction → Signer.signTransaction → RewardsClient.postClaim (server broadcasts)
+
+**Gacha pack flow:** GachaClient.generatePack → Signer.signTransaction → GachaClient.submitPack → GachaClient.openPack
+
+**Gacha marketplace flow:** GachaClient.buildMarketplaceTx → Signer.signTransaction → GachaClient.broadcast
+
+**Gacha shipping flow:** GachaClient.getShippingNonce → Signer.signMessage → GachaClient.verifyShippingSignIn → bearer-token reads, estimate/prepare → Signer.signTransaction → GachaClient.submitShipping
 
 **Vrfd flow:** VrfdClient.checkEligibility → VrfdClient.craftTxn → Signer.signTransaction → VrfdClient.execute
 

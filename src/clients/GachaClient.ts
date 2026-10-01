@@ -75,7 +75,7 @@ export type VrfVerification = {
   transactionSignature?: string;
   turboMode?: boolean;
   algorithm?: string;
-  vrfMode?: string;
+  vrfMode?: string | number;
 };
 
 export type LeaderboardSeason = {
