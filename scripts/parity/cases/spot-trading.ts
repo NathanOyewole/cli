@@ -1,3 +1,5 @@
+import { getAddressDecoder, getBase64Codec } from "@solana/kit";
+
 import { UNFUNDED_SIM_ERROR, type ParityCase } from "../types.ts";
 
 // Public wallets with legacy V1 orders, found via the V1 programs' recent txs.
@@ -5,6 +7,56 @@ const V1_TRIGGER_WALLET = "9v3JUtVwZ6N7MLRonkCdLVjpuP3tMJBJvo9ATWRpXhj9";
 const V1_DCA_WALLET = "9UZrTuJMwUn8J57tVWdFQKfXz3fQM1w9jkr7LkuWXP8a";
 // Token-2022 mint with a 3% transfer fee, which Shield always flags.
 const TRANSFER_FEE_MINT = "4zfwqBtYpDjdiocYL91bc4h2qoeuD13MwgbiZWbECPTE";
+
+const DCA_V1_PROGRAM = "DCA265Vj8a9CEuX1eb1LWRnDT7uK6q1xMipnNyatn23M";
+const SOL_MINT = "So11111111111111111111111111111111111111112";
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+// Any open V1 DCA account works: closing deletes the account, so every one
+// the program owns is still open. USDC -> SOL keeps both legs plain SPL.
+async function openV1Dca(): Promise<Record<string, string>> {
+  const res = await fetch(
+    process.env.RPC_URL ?? "https://api.mainnet-beta.solana.com",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "getProgramAccounts",
+        params: [
+          DCA_V1_PROGRAM,
+          {
+            encoding: "base64",
+            dataSlice: { offset: 8, length: 96 },
+            filters: [
+              { memcmp: { offset: 40, bytes: USDC_MINT } },
+              { memcmp: { offset: 72, bytes: SOL_MINT } },
+            ],
+          },
+        ],
+      }),
+    }
+  );
+  const { result, error } = (await res.json()) as {
+    result?: { pubkey: string; account: { data: [string, string] } }[];
+    error?: { message: string };
+  };
+  if (!result) {
+    throw new Error(`getProgramAccounts: ${error?.message ?? res.status}`);
+  }
+  const decoder = getAddressDecoder();
+  for (const { pubkey, account } of result) {
+    const data = getBase64Codec().encode(account.data[0]);
+    const [user, input, output] = [0, 32, 64].map((o) =>
+      decoder.decode(data, o)
+    );
+    if (input === USDC_MINT && output === SOL_MINT) {
+      return { WALLET: user!, ORDER: pubkey };
+    }
+  }
+  throw new Error("no open USDC -> SOL V1 DCA order found");
+}
 
 type OrderList = { count: number; orders: unknown[] };
 const isOrderList = (json: unknown): json is OrderList =>
@@ -312,14 +364,7 @@ export const cases: ParityCase[] = [
     id: "dca-close-v1",
     feature: "recurring-interval",
     kind: "tx",
-    wallet: V1_DCA_WALLET,
-    args: [
-      "spot",
-      "dca",
-      "close",
-      "--v1",
-      "--order",
-      "4qxwzMs2ATDbkYZse5LZZbDuS6DvpTs7FwX2Y8sUaySW",
-    ],
+    resolve: openV1Dca,
+    args: ["spot", "dca", "close", "--v1", "--order", "$ORDER"],
   },
 ];
