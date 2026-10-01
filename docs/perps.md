@@ -6,6 +6,10 @@ Requires: an active key for write commands. Read commands (`markets`, `leaderboa
 
 The JLP pool markets are **SOL**, **BTC**, and **ETH**. Collateral can be deposited in SOL, BTC, ETH, or USDC. Minimum collateral is $10 for new positions. Orderbook markets (JUP, HYPE, ZEC, and others) use `jup perps jtx`, see [below](#orderbook-jtx-markets-jup-hype-zec-spcx-sndk-skhynix).
 
+## Transaction outcomes
+
+Pool-market writes (`open`, `set`, `close`) are co-signed and sent by a keeper; the CLI then waits for the transaction to confirm on-chain and exits non-zero if it failed. If a submission times out or the server errors, the transaction may still have been sent: the error starts with `Outcome unknown` and names the signature. Check `jup perps positions` (or `jup perps jtx positions`) or the signature on an explorer before retrying.
+
 ## Commands
 
 ### View positions

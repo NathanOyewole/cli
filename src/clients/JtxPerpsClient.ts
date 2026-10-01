@@ -311,7 +311,10 @@ export class JtxPerpsClient {
     signedTransaction: string
   ): Promise<JtxExecuteResponse> {
     return this.#ky
-      .post("crosschain/intent/execute", { json: { signedTransaction } })
+      .post("crosschain/intent/execute", {
+        json: { signedTransaction },
+        timeout: 60_000,
+      })
       .json();
   }
 

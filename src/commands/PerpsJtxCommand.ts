@@ -28,6 +28,7 @@ const MIN_OPEN_COLLATERAL_USD = 10;
 const MIN_DEPOSIT_USD = 5;
 const BETA_MIN_STAKE = 69n * 10n ** BigInt(JupStake.DECIMALS);
 const CONFIRM_TIMEOUT_MS = 20_000;
+const CHECK_COMMAND = "jup perps jtx positions";
 
 const toSide = (side: JtxSide) => (side === "Bid" ? "long" : "short");
 const num = (v: string | number | null | undefined) =>
@@ -504,15 +505,19 @@ export class PerpsJtxCommand {
     const signed = await signer.signTransaction(
       transaction as Base64EncodedBytes
     );
-    const res = await JtxPerpsClient.postExecute(signed);
+    const res = await PerpsTx.submit(signed, CHECK_COMMAND, () =>
+      JtxPerpsClient.postExecute(signed)
+    );
     if (res.status === "Success" && res.code === 0) {
-      return res.signature ?? null;
+      return res.signature ?? PerpsTx.signatureOf(signed);
     }
     if (res.code === -2) {
       throw new Error(`Submission failed: ${res.error ?? "rejected"}`);
     }
-    throw new Error(
-      `Submission outcome unknown (${res.error ?? `code ${res.code}`})${res.signature ? `, tx ${res.signature}` : ""}. Check 'jup perps jtx positions' before retrying.`
+    throw PerpsTx.outcomeUnknown(
+      res.signature ?? PerpsTx.signatureOf(signed),
+      CHECK_COMMAND,
+      res.error ?? `code ${res.code}`
     );
   }
 
