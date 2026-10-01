@@ -228,6 +228,7 @@ export type V1DcaOrder = {
   outputMint: string;
   inDeposited: string;
   inUsed: string;
+  inWithdrawn: string;
   inAmountPerCycle: string;
   cycleFrequency: string;
   outReceived: string;
@@ -237,7 +238,9 @@ export type V1DcaOrder = {
   closeTx: string;
 };
 
-export type V1Page<T> = { orders: T[]; totalPages: number; page: number };
+type V1Page<T> = { orders: T[]; totalPages: number; totalItems: number };
+
+export type V1List<T> = { orders: T[]; total: number };
 
 export class TriggerClient {
   static readonly #ky = ClientConfig.ky.extend({
@@ -252,6 +255,7 @@ export class TriggerClient {
   });
   static readonly #AUTH_DIR = join(Config.CONFIG_DIR, "auth");
   static readonly #REFRESH_MARGIN_MS = 10_000;
+  static readonly #V1_PAGE_SIZE = 10;
 
   public static async checkMints(req: {
     orderType: OrderKind;
@@ -389,10 +393,23 @@ export class TriggerClient {
 
   public static async getV1TriggerOrders(req: {
     user: string;
-    orderStatus: "active" | "history";
-    page: number;
-  }): Promise<V1Page<V1TriggerOrder>> {
-    return this.#v1Ky.get("getTriggerOrders", { searchParams: req }).json();
+    state: "active" | "past";
+    mint?: string | undefined;
+    offset: number;
+    limit: number;
+  }): Promise<V1List<V1TriggerOrder>> {
+    return this.#collectV1Pages(req, (page) =>
+      this.#v1Ky
+        .get("getTriggerOrders", {
+          searchParams: {
+            user: req.user,
+            orderStatus: req.state === "active" ? "active" : "history",
+            page,
+            ...(req.mint && { mint: req.mint }),
+          },
+        })
+        .json()
+    );
   }
 
   public static async postV1CancelOrders(req: {
@@ -414,14 +431,39 @@ export class TriggerClient {
   public static async getV1DcaOrders(req: {
     user: string;
     state: "active" | "past";
-    page: number;
-  }): Promise<V1Page<V1DcaOrder>> {
+    offset: number;
+    limit: number;
+  }): Promise<V1List<V1DcaOrder>> {
     const path = req.state === "active" ? "active-dca" : "historical-dca";
-    return this.#workerKy
-      .get(`${path}/v2/${req.user}`, {
-        searchParams: { page: req.page, includeFailedTx: true },
-      })
-      .json();
+    return this.#collectV1Pages(req, (page) =>
+      this.#workerKy
+        .get(`${path}/v2/${req.user}`, {
+          searchParams: { page, includeFailedTx: true },
+        })
+        .json()
+    );
+  }
+
+  // V1 endpoints paginate by fixed-size pages; translate to offset/limit.
+  static async #collectV1Pages<T>(
+    req: { offset: number; limit: number },
+    fetchPage: (page: number) => Promise<V1Page<T>>
+  ): Promise<V1List<T>> {
+    let page = Math.floor(req.offset / this.#V1_PAGE_SIZE) + 1;
+    let skip = req.offset % this.#V1_PAGE_SIZE;
+    const orders: T[] = [];
+    let total = 0;
+    while (orders.length < req.limit) {
+      const res = await fetchPage(page);
+      total = res.totalItems;
+      orders.push(...res.orders.slice(skip, skip + req.limit - orders.length));
+      skip = 0;
+      if (page >= res.totalPages || res.orders.length === 0) {
+        break;
+      }
+      page++;
+    }
+    return { orders, total };
   }
 
   static #historyParams(query: OrderHistoryQuery): Record<string, string> {

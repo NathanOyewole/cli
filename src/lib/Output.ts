@@ -38,6 +38,12 @@ export class Output {
       try {
         const json = JSON.parse(text);
         message = json.message ?? json.error ?? JSON.stringify(json);
+        if (json.details && typeof json.details === "object") {
+          const details = Object.entries(json.details)
+            .map(([field, reason]) => `${field}: ${String(reason)}`)
+            .join(", ");
+          message = `${message} (${details})`;
+        }
       } catch {
         message = text || err.message;
       }
