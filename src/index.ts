@@ -2,14 +2,18 @@
 import { Command } from "commander";
 
 import { ConfigCommand } from "./commands/ConfigCommand.ts";
+import { DepositCommand } from "./commands/DepositCommand.ts";
 import { GachaCommand } from "./commands/GachaCommand.ts";
+import { GiftCommand } from "./commands/GiftCommand.ts";
 import { KeysCommand } from "./commands/KeysCommand.ts";
 import { LendCommand } from "./commands/LendCommand.ts";
 import { PerpsCommand } from "./commands/PerpsCommand.ts";
+import { PortfolioCommand } from "./commands/PortfolioCommand.ts";
 import { PredictionsCommand } from "./commands/PredictionsCommand.ts";
 import { RewardsCommand } from "./commands/RewardsCommand.ts";
 import { SignCommand } from "./commands/SignCommand.ts";
 import { SpotCommand } from "./commands/SpotCommand.ts";
+import { StakeCommand } from "./commands/StakeCommand.ts";
 import { UpdateCommand } from "./commands/UpdateCommand.ts";
 import { VrfdCommand } from "./commands/VrfdCommand.ts";
 
@@ -40,14 +44,18 @@ program
   });
 
 ConfigCommand.register(program);
+DepositCommand.register(program);
 GachaCommand.register(program);
+GiftCommand.register(program);
 KeysCommand.register(program);
 LendCommand.register(program);
 PerpsCommand.register(program);
+PortfolioCommand.register(program);
 PredictionsCommand.register(program);
 RewardsCommand.register(program);
 SignCommand.register(program);
 SpotCommand.register(program);
+StakeCommand.register(program);
 UpdateCommand.register(program);
 VrfdCommand.register(program);
 

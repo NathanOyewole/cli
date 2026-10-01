@@ -15,6 +15,10 @@ On failure, commands exit with non-zero code with an error message. In JSON mode
 - [Sign](docs/sign.md): Sign transactions from `--dry-run`
 - [Spot](docs/spot.md): Spot trading (swaps, limit orders, DCA), transfers, token search and portfolio data
 - [Spot Discovery](docs/spot-discovery.md): Token lists, screener, Smart Money, token detail, watchlists and wallet tracker
+- [Portfolio](docs/portfolio.md): Net worth, DeFi positions, spot PnL, airdrops and the address book across wallets
+- [Gift](docs/gift.md): Send tokens as claimable gift links
+- [Deposit](docs/deposit.md): Receive address, cross-chain deposit addresses, fiat onramp and bridge quotes
+- [Stake](docs/stake.md): Native SOL staking, JupSOL and stake account management
 - [Perps](docs/perps.md): Perps trading (leveraged longs/shorts)
 - [Lend](docs/lend.md): Lending and yield farming
 - [Predictions](docs/predictions.md): Prediction markets
