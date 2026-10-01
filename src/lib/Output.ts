@@ -140,6 +140,28 @@ export class Output {
     });
   }
 
+  public static formatCompactDollar(amount: number | null | undefined): string {
+    if (!amount) {
+      return chalk.gray("—");
+    }
+    return amount.toLocaleString("en-US", {
+      currency: "USD",
+      style: "currency",
+      notation: "compact",
+      maximumFractionDigits: 2,
+    });
+  }
+
+  public static formatCompactNumber(value: number | null | undefined): string {
+    if (value === undefined || value === null) {
+      return chalk.gray("—");
+    }
+    return value.toLocaleString("en-US", {
+      notation: "compact",
+      maximumFractionDigits: 2,
+    });
+  }
+
   public static formatDollarChange(amount: number | undefined): string {
     if (amount === undefined || amount === null || amount === 0) {
       return chalk.gray("\u2014");

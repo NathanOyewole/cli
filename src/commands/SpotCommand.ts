@@ -19,21 +19,26 @@ import { NumberConverter } from "../lib/NumberConverter.ts";
 import { Output } from "../lib/Output.ts";
 import { Signer } from "../lib/Signer.ts";
 import { Swap } from "../lib/Swap.ts";
+import { SpotDiscoveryCommand } from "./SpotDiscoveryCommand.ts";
 
 export class SpotCommand {
   public static register(program: Command): void {
     const spot = program
       .command("spot")
       .description("Swaps, transfers, token and portfolio data");
-    spot
+    const tokens = spot
       .command("tokens")
-      .description("Search for tokens by symbol or mint address")
-      .requiredOption(
+      .description(
+        "Search tokens, or browse a list (trending, popular, toptraded, organic, ...)"
+      )
+      .option(
         "--search <query>",
         "Token symbol or comma-delimited mint addresses"
       )
-      .option("--limit <n>", "Max number of results")
-      .action((opts) => this.tokens(opts));
+      .option("--limit <n>", "Max number of results");
+    SpotDiscoveryCommand.addListOptions(tokens).action((opts) =>
+      this.tokens(opts)
+    );
     spot
       .command("quote")
       .description("Get a swap quote")
@@ -102,18 +107,33 @@ export class SpotCommand {
       .option("--key <name>", "Key to use for signing")
       .option("--token <token>", "Token symbol or mint address to reclaim")
       .action((opts) => this.reclaim(opts));
+    SpotDiscoveryCommand.register(spot);
   }
 
-  private static async tokens(opts: {
-    search: string;
-    limit?: string;
-  }): Promise<void> {
+  private static async tokens(
+    opts: {
+      search?: string;
+      list?: string;
+      limit?: string;
+    } & Record<string, unknown>
+  ): Promise<void> {
     if (opts.limit && isNaN(Number(opts.limit))) {
       throw new Error("--limit must be a number");
     }
+    if (!opts.search === !opts.list) {
+      throw new Error("Provide exactly one of --search or --list.");
+    }
+    if (opts.list) {
+      return SpotDiscoveryCommand.list({ ...opts, list: opts.list });
+    }
+    if (SpotDiscoveryCommand.hasListOptions(opts)) {
+      throw new Error(
+        "--interval, --sort, --offset and filters only apply with --list."
+      );
+    }
 
     const tokens = await DatapiClient.getTokensSearch({
-      query: opts.search,
+      query: opts.search!,
       limit: opts.limit,
     });
 
