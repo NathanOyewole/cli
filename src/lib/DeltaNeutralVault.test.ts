@@ -78,7 +78,10 @@ describe("instructions", () => {
     const ix = await DeltaNeutralVault.withdrawInstruction(USER, 25_004_182n);
     expect([...ix.data!]).toEqual([
       ...anchorDiscriminator("global:request_withdrawal"),
-      ...[0x96, 0x88, 0x7d, 0x01],
+      0x96,
+      0x88,
+      0x7d,
+      0x01,
       ...Array<number>(12).fill(0),
     ]);
     expect(ix.accounts?.length).toBe(8);
