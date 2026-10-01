@@ -11,7 +11,9 @@ const FALLBACK = {
   limitOrderOwner: "Aviv8GboDaosPfCCfkdp2wJakMaZUijeuPjTvfmmZcy3",
   limitOrder: "BJSfbvssqnZpGj8ptoyXD8EWRizpiWxmTqvZzKM3gpiG",
   arcader: "GuP8ysGU8Y3sT6uzTZrU1SuqHFvqtNazStFzMXaur6dc",
+  buyer: "2cSGx9YmigEyNvdwvX65cw4VvzUoMSAq2znL1t2ngsiJ",
 };
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const KALSHI_MARKET = "SENATETX-26-D";
 // Kalshi buys are disabled server-side (`kalshi_buys_disabled`), so buys use Polymarket.
 const POLYMARKET_MARKET = "POLY-1357374";
@@ -79,6 +81,26 @@ async function discover() {
     [FALLBACK.claimer, ...candidates],
     claimable
   );
+  // Buys need USDC; the order endpoint returns no transaction for a wallet
+  // that can't pay, so ask it to build one.
+  const canBuy = async (w: string) => {
+    const res = await fetch(`${API}/orders`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        orderType: "market",
+        isBuy: true,
+        ownerPubkey: w,
+        marketId: POLYMARKET_MARKET,
+        isYes: true,
+        depositAmount: "5000000",
+        depositMint: USDC_MINT,
+      }),
+    }).catch(() => null);
+    const json = res?.ok ? ((await res.json()) as Json) : null;
+    return json?.transaction ? w : null;
+  };
+  const buyer = await findWallet([FALLBACK.buyer, ...candidates], canBuy);
   const limitOrder = await findWallet(
     [FALLBACK.limitOrderOwner, ...candidates],
     async (w) => (await restingOrder(w)) ?? null
@@ -94,6 +116,7 @@ async function discover() {
   return {
     trader: trader.wallet,
     position: trader.found,
+    buyer: buyer?.wallet ?? FALLBACK.buyer,
     claimer: claimer?.wallet ?? null,
     limitOrderOwner: limitOrder?.wallet ?? null,
     limitOrder: limitOrder?.found ?? null,
@@ -110,6 +133,7 @@ const found = live
   : {
       trader: FALLBACK.trader,
       position: FALLBACK.position,
+      buyer: FALLBACK.buyer,
       claimer: FALLBACK.claimer,
       limitOrderOwner: FALLBACK.limitOrderOwner,
       limitOrder: FALLBACK.limitOrder,
@@ -213,7 +237,7 @@ const feed: ParityCase[] = [
     id: "open-market",
     feature: "predict-feed",
     kind: "tx",
-    wallet: found.trader,
+    wallet: found.buyer,
     args: [
       "predictions",
       "open",
@@ -229,7 +253,7 @@ const feed: ParityCase[] = [
     id: "open-limit",
     feature: "predict-feed",
     kind: "tx",
-    wallet: found.trader,
+    wallet: found.buyer,
     args: [
       "predictions",
       "open",
@@ -272,7 +296,7 @@ const timed: ParityCase[] = [
         id: "timed-open",
         feature: "predict-timed",
         kind: "tx",
-        wallet: found.trader,
+        wallet: found.buyer,
         args: [
           "predictions",
           "open",
@@ -371,6 +395,20 @@ const community: ParityCase[] = [
     key: "generated",
     args: ["predictions", "clans", "invites"],
     expect: hasKey("invites"),
+  },
+  {
+    id: "clans-invites-dry-run",
+    feature: "predict-community",
+    kind: "read",
+    args: ["--dry-run", "predictions", "clans", "invites"],
+    expect: signedPreview,
+  },
+  {
+    id: "comments-clan-dry-run",
+    feature: "predict-community",
+    kind: "read",
+    args: ["--dry-run", "predictions", "comments", "list", "--clan", CLAN],
+    expect: signedPreview,
   },
   {
     id: "clans-create",
