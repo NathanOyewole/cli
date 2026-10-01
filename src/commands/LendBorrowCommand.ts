@@ -535,12 +535,12 @@ export class LendBorrowCommand {
       positionAddress: nft.address,
       collateral: {
         token: this.sideInfo(vault.supplyToken),
-        amount: collateral,
+        amount: this.toUi(collateral, vault.supplyToken),
         amountUsd: collateralUsd,
       },
       debt: {
         token: this.sideInfo(vault.borrowToken),
-        amount: debt,
+        amount: this.toUi(debt, vault.borrowToken),
         amountUsd: debtUsd,
       },
       netValueUsd,
@@ -766,17 +766,23 @@ export class LendBorrowCommand {
       ? LendMath.positionAmounts(nft)
       : { collateral: 0, debt: 0 };
 
-    const toRaw = (value: string, decimals: number) =>
-      BigInt(NumberConverter.toChainAmount(value, decimals));
+    // Amounts are entered in UI units; a scaled-UI token (xStocks) settles
+    // UI ÷ multiplier on chain, as in jup.ag's deposit and repay mutations.
+    const scale = {
+      collateral: LendMath.uiMultiplier(supply),
+      debt: LendMath.uiMultiplier(debt),
+    };
+    const toRaw = (value: string, decimals: number, multiplier: number) =>
+      BigInt(NumberConverter.toChainAmount(value, decimals, multiplier));
     const colRaw = opts.deposit
-      ? toRaw(opts.deposit, supply.decimals)
+      ? toRaw(opts.deposit, supply.decimals, scale.collateral)
       : opts.withdraw && opts.withdraw !== "max"
-        ? -toRaw(opts.withdraw, supply.decimals)
+        ? -toRaw(opts.withdraw, supply.decimals, scale.collateral)
         : 0n;
     const debtRaw = opts.borrow
-      ? toRaw(opts.borrow, debt.decimals)
+      ? toRaw(opts.borrow, debt.decimals, scale.debt)
       : opts.repay && opts.repay !== "max"
-        ? -toRaw(opts.repay, debt.decimals)
+        ? -toRaw(opts.repay, debt.decimals, scale.debt)
         : 0n;
     const withdrawAll = opts.withdraw === "max";
     const repayAll = opts.repay === "max";
@@ -792,7 +798,7 @@ export class LendBorrowCommand {
       debt: Math.max(0, current.debt + debtChange),
     };
     const health = LendMath.health(vault, after.collateral, after.debt);
-    this.validate({ vault, current, after, health, colRaw, debtRaw, repayAll });
+    this.validate({ vault, current, after, health, colRaw, debtRaw, scale });
 
     const [{ nftId, instructions, addressLookupTableAddresses }, programs] =
       await Promise.all([
@@ -855,13 +861,13 @@ export class LendBorrowCommand {
       positionId: nftId,
       collateral: {
         token: this.sideInfo(vault.supplyToken),
-        change: collateralChange,
-        amount: after.collateral,
+        change: this.toUi(collateralChange, vault.supplyToken),
+        amount: this.toUi(after.collateral, vault.supplyToken),
       },
       debt: {
         token: this.sideInfo(vault.borrowToken),
-        change: debtChange,
-        amount: after.debt,
+        change: this.toUi(debtChange, vault.borrowToken),
+        amount: this.toUi(after.debt, vault.borrowToken),
       },
       ltvPct: health.ltvPct,
       maxLtvPct: health.maxLtvPct,
@@ -895,9 +901,9 @@ export class LendBorrowCommand {
     health: { ltvPct: number; maxLtvPct: number };
     colRaw: bigint;
     debtRaw: bigint;
-    repayAll: boolean;
+    scale: { collateral: number; debt: number };
   }): void {
-    const { vault, current, after, health } = p;
+    const { vault, current, after, health, scale } = p;
     if (-p.colRaw > BigInt(vault.withdrawable)) {
       throw new Error(
         `Withdrawal exceeds the vault's currently withdrawable liquidity.`
@@ -914,7 +920,7 @@ export class LendBorrowCommand {
         current.collateral
     ) {
       throw new Error(
-        `Position only has ${current.collateral} ${vault.supplyToken.token0.symbol} collateral. Omit --amount to withdraw all.`
+        `Position only has ${current.collateral * scale.collateral} ${vault.supplyToken.token0.symbol} collateral. Omit --amount to withdraw all.`
       );
     }
     if (
@@ -923,7 +929,7 @@ export class LendBorrowCommand {
         current.debt
     ) {
       throw new Error(
-        `Position only owes ${current.debt} ${vault.borrowToken.token0.symbol}. Omit --amount to repay all.`
+        `Position only owes ${current.debt * scale.debt} ${vault.borrowToken.token0.symbol}. Omit --amount to repay all.`
       );
     }
     const increasesRisk = p.debtRaw > 0n || p.colRaw < 0n;
@@ -936,7 +942,7 @@ export class LendBorrowCommand {
       Number(vault.minimumBorrowing) / 10 ** vault.borrowToken.token0.decimals;
     if (p.debtRaw > 0n && after.debt < minBorrow) {
       throw new Error(
-        `Minimum borrow for this vault is ${minBorrow} ${vault.borrowToken.token0.symbol}.`
+        `Minimum borrow for this vault is ${minBorrow * scale.debt} ${vault.borrowToken.token0.symbol}.`
       );
     }
   }
@@ -1025,6 +1031,18 @@ export class LendBorrowCommand {
       symbol: side.token0.symbol,
       decimals: side.token0.decimals,
     };
+  }
+
+  // Protocol units (raw / 10^decimals) to UI units: a scaled-UI token shows
+  // raw × multiplier. Token prices and the vault oracle are per raw unit
+  // (Fluid's SPYx price matches datapi's usdPricePrescaled), so USD values and
+  // LTV stay on protocol units.
+  public static toUi(amount: number, side: VaultSide): number {
+    const multiplier = LendMath.sideUiMultiplier(side);
+    if (multiplier === 1) {
+      return amount;
+    }
+    return Number((amount * multiplier).toFixed(LendMath.sideDecimals(side)));
   }
 
   private static actionAmount(raw: string | null, side: VaultSide) {

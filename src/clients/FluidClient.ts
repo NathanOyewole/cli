@@ -40,6 +40,13 @@ export type VaultToken = {
   decimals: number;
   price: string;
   stakingApr?: number | string;
+  nativeStakeVoteAccount?: string;
+  // Token-2022 scaled UI amount (xStocks): UI amount = raw amount × multiplier.
+  scaledUiConfig?: {
+    multiplier: number;
+    newMultiplier: number;
+    newMultiplierEffectiveTimestamp: string;
+  };
 };
 
 export type VaultSide = { token0: VaultToken; token1: VaultToken | null };

@@ -240,16 +240,16 @@ export class LendSmartOperate {
       positionId: operate.nftId,
       collateral: {
         token: LendBorrowCommand.sideInfo(vault.supplyToken),
-        change: change.collateral,
-        amount: after.collateral,
+        change: LendBorrowCommand.toUi(change.collateral, vault.supplyToken),
+        amount: LendBorrowCommand.toUi(after.collateral, vault.supplyToken),
         ...(vault.supplyToken.token1
           ? { legs: this.legViews(vault.supplyToken, col.legs) }
           : {}),
       },
       debt: {
         token: LendBorrowCommand.sideInfo(vault.borrowToken),
-        change: change.debt,
-        amount: after.debt,
+        change: LendBorrowCommand.toUi(change.debt, vault.borrowToken),
+        amount: LendBorrowCommand.toUi(after.debt, vault.borrowToken),
         ...(vault.borrowToken.token1
           ? { legs: this.legViews(vault.borrowToken, debt.legs) }
           : {}),
@@ -295,10 +295,17 @@ export class LendSmartOperate {
   // Signed per-token moves of a smart side, one per pair token.
   public static legViews(side: VaultSide, legs: bigint[]): LegView[] {
     const tokens = side.token1 ? [side.token0, side.token1] : [side.token0];
-    return tokens.map((t, i) => ({
-      token: { id: t.address, symbol: t.symbol, decimals: t.decimals },
-      change: this.human(legs[i] ?? 0n, t.decimals),
-    }));
+    return tokens.map((t, i) => {
+      const multiplier = LendMath.uiMultiplier(t);
+      const change = this.human(legs[i] ?? 0n, t.decimals);
+      return {
+        token: { id: t.address, symbol: t.symbol, decimals: t.decimals },
+        change:
+          multiplier === 1
+            ? change
+            : Number((change * multiplier).toFixed(t.decimals)),
+      };
+    });
   }
 
   public static slippageBps(
@@ -321,11 +328,16 @@ export class LendSmartOperate {
     return (amount * factor + scale / 2n) / scale;
   }
 
-  public static toRaw(value: string, decimals: number, flag: string): bigint {
+  public static toRaw(
+    value: string,
+    decimals: number,
+    flag: string,
+    uiMultiplier = 1
+  ): bigint {
     if (!(Number(value) > 0)) {
       throw new Error(`${flag} must be a positive number.`);
     }
-    return BigInt(NumberConverter.toChainAmount(value, decimals));
+    return BigInt(NumberConverter.toChainAmount(value, decimals, uiMultiplier));
   }
 
   // One side's leg input, following useSmart{DepositAndBorrow,RepayAndWithdraw}
@@ -350,15 +362,21 @@ export class LendSmartOperate {
       p.kind === "collateral"
         ? ["--deposit", "--deposit1", "--withdraw", "--withdraw1"]
         : ["--borrow", "--borrow1", "--repay", "--repay1"];
+    const tokens = [p.side.token0, p.side.token1];
     const parse = (
       values: [string | undefined, string | undefined],
       offset: number
-    ) => {
-      const decimals = [p.side.token0.decimals, p.side.token1?.decimals ?? 0];
-      return values.map((v, i) =>
-        v === undefined ? 0n : this.toRaw(v, decimals[i]!, flags[offset + i]!)
+    ) =>
+      values.map((v, i) =>
+        v === undefined
+          ? 0n
+          : this.toRaw(
+              v,
+              tokens[i]?.decimals ?? 0,
+              flags[offset + i]!,
+              tokens[i] ? LendMath.uiMultiplier(tokens[i]) : 1
+            )
       ) as [bigint, bigint];
-    };
     const added = parse(p.add, 0);
     const removed = p.remove
       ? parse(p.remove, 2)

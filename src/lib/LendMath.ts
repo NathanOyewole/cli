@@ -3,6 +3,7 @@ import type {
   Nft,
   Vault,
   VaultSide,
+  VaultToken,
 } from "../clients/FluidClient.ts";
 
 const SECONDS_PER_YEAR = 365 * 24 * 60 * 60;
@@ -74,6 +75,25 @@ export class LendMath {
     return Math.floor(cap * 100) / 100;
   }
 
+  // getEffectiveMultiplier in the jup.ag lend UI: the pending multiplier wins
+  // once its effective time has passed.
+  public static uiMultiplier(token: VaultToken, nowMs = Date.now()): number {
+    const config = token.scaledUiConfig;
+    if (!config) {
+      return 1;
+    }
+    const effectiveMs = Number(config.newMultiplierEffectiveTimestamp) * 1000;
+    if (config.newMultiplier !== undefined && effectiveMs <= nowMs) {
+      return config.newMultiplier;
+    }
+    return config.multiplier ?? 1;
+  }
+
+  // A smart side is denominated in DEX shares, which are never scaled.
+  public static sideUiMultiplier(side: VaultSide, nowMs = Date.now()): number {
+    return this.isSmart(side) ? 1 : this.uiMultiplier(side.token0, nowMs);
+  }
+
   public static sideDecimals(side: VaultSide): number {
     return this.isSmart(side) ? DEX_SHARE_DECIMALS : side.token0.decimals;
   }
@@ -92,6 +112,8 @@ export class LendMath {
     };
   }
 
+  // Amounts are in protocol units (raw / 10^decimals), which the oracle
+  // prices; the liquidation price is quoted per UI unit of collateral.
   public static health(
     vault: Vault,
     collateral: number,
@@ -108,8 +130,11 @@ export class LendMath {
       const collateralInDebt = collateral * oraclePrice;
       ratio = collateralInDebt <= 0 ? 1 : Math.min(debt / collateralInDebt, 1);
     }
+    const uiScale =
+      this.sideUiMultiplier(vault.borrowToken) /
+      this.sideUiMultiplier(vault.supplyToken);
     const liquidationPrice =
-      collateral > 0 && debt > 0 ? debt / (collateral * lt) : null;
+      collateral > 0 && debt > 0 ? (debt / (collateral * lt)) * uiScale : null;
     return {
       ltvPct: round(ratio * 100, 2),
       maxLtvPct: Number(vault.collateralFactor) / 10,

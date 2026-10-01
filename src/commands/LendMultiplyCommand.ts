@@ -458,13 +458,13 @@ export class LendMultiplyCommand {
       leverage: health.multiplier,
       collateral: {
         token: LendBorrowCommand.sideInfo(vault.supplyToken),
-        change: collateralChange,
-        amount: after.collateral,
+        change: LendBorrowCommand.toUi(collateralChange, vault.supplyToken),
+        amount: LendBorrowCommand.toUi(after.collateral, vault.supplyToken),
       },
       debt: {
         token: LendBorrowCommand.sideInfo(vault.borrowToken),
-        change: debtChange,
-        amount: after.debt,
+        change: LendBorrowCommand.toUi(debtChange, vault.borrowToken),
+        amount: LendBorrowCommand.toUi(after.debt, vault.borrowToken),
       },
       ltvPct: health.ltvPct,
       maxLtvPct: health.maxLtvPct,

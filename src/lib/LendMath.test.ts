@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { Vault } from "../clients/FluidClient.ts";
 import { LendMath } from "./LendMath.ts";
+import { NumberConverter } from "./NumberConverter.ts";
 
 const token = (symbol: string, decimals: number) => ({
   address: symbol,
@@ -110,6 +111,47 @@ describe("LendMath", () => {
         exchangeRate: 1.0002,
       },
     ]);
+  });
+
+  test("scaled UI multiplier switches to the new one at its effective time", () => {
+    const spyx = {
+      ...token("SPYx", 8),
+      scaledUiConfig: {
+        multiplier: 1.003909240011759,
+        newMultiplier: 1.005714560286254,
+        newMultiplierEffectiveTimestamp: "1781755200",
+      },
+    };
+    expect(LendMath.uiMultiplier(spyx, 1781755199_000)).toBe(1.003909240011759);
+    expect(LendMath.uiMultiplier(spyx, 1781755200_000)).toBe(1.005714560286254);
+    expect(LendMath.uiMultiplier(token("USDC", 6))).toBe(1);
+  });
+
+  test("UI amounts settle as UI ÷ multiplier raw units", () => {
+    // 10 SPYx at 1.005714560286254 → 9.9431791036 raw SPYx (8 decimals).
+    expect(NumberConverter.toChainAmount("10", 8, 1.005714560286254)).toBe(
+      "994317910"
+    );
+  });
+
+  test("liquidation price is per UI unit of a scaled collateral", () => {
+    const scaled = {
+      ...vault,
+      supplyToken: {
+        token0: {
+          ...token("SPYx", 8),
+          scaledUiConfig: {
+            multiplier: 2,
+            newMultiplier: 2,
+            newMultiplierEffectiveTimestamp: "0",
+          },
+        },
+        token1: null,
+      },
+    } as Vault;
+    const h = LendMath.health(scaled, 10, 500);
+    expect(h.ltvPct).toBe(50);
+    expect(h.liquidationPrice).toBe(29.41176471);
   });
 
   test("days to liquidation", () => {
