@@ -67,6 +67,13 @@ export class NumberConverter {
     decimals: number,
     multiplier?: number | undefined
   ): string {
+    // A sign would flip the meaning of signed on-chain deltas (repay becomes
+    // borrow), so only plain non-negative decimals are accepted.
+    if (!/^(\d+\.?\d*|\.\d+)$/.test(amount)) {
+      throw new Error(
+        `Invalid amount "${amount}": expected a non-negative decimal number.`
+      );
+    }
     const [integerPart, fractionalPart] = amount.split(".");
     const postDecimals = this.removeInsignificantZeros(
       (integerPart ?? "") +

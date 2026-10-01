@@ -92,6 +92,22 @@ describe("fromChainAmount", () => {
 });
 
 describe("toChainAmount", () => {
+  test("rejects signed, empty and non-decimal input", () => {
+    for (const bad of ["-5", "+5", "", "abc", "1e-7", "1,000", " 1"]) {
+      expect(() => NumberConverter.toChainAmount(bad, 6)).toThrow(
+        `Invalid amount "${bad}": expected a non-negative decimal number.`
+      );
+    }
+  });
+
+  test("accepts plain decimals including leading and trailing dots", () => {
+    expect(
+      [".5", "5.", "0", "0.000001"].map((a) =>
+        NumberConverter.toChainAmount(a, 6)
+      )
+    ).toEqual(["500000", "5000000", "0", "1"]);
+  });
+
   test("integer amounts", () => {
     expect(NumberConverter.toChainAmount("1", 6)).toBe("1000000");
     expect(NumberConverter.toChainAmount("100", 6)).toBe("100000000");
