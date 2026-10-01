@@ -6,6 +6,7 @@ import {
   InviteClient,
   type CraftInviteTxResponse,
   type InviteInfo,
+  type InviteSummary,
 } from "../clients/InviteClient.ts";
 import { Asset, resolveWalletAsset } from "../lib/Asset.ts";
 import { Config } from "../lib/Config.ts";
@@ -92,7 +93,21 @@ export class GiftCommand {
     }
 
     const inviteSigned = await code.sign(craft.transaction);
-    const signature = await this.execute(signer, inviteSigned, craft.requestId);
+    if (!Config.dryRun) {
+      // Printed before submitting so a timeout or crash can't lose the secret.
+      console.error(
+        `Gift link (keep it private; it claims the gift): ${code.link}`
+      );
+    }
+    const { signature, status } = await this.execute(
+      signer,
+      inviteSigned,
+      craft.requestId
+    ).catch((err: unknown) => {
+      throw new Error(
+        `${err instanceof Error ? err.message : String(err)} Gift link: ${code.link}`
+      );
+    });
     const amount = NumberConverter.fromChainAmount(
       rawAmount,
       token.decimals,
@@ -114,6 +129,7 @@ export class GiftCommand {
       networkFeeLamports: craft.feeLamports,
       expiresAt: this.isoFromUnix(craft.expireAt),
       signature,
+      status,
       // Already signed by the gift keypair; only the sender signature is missing.
       ...(Config.dryRun && { transaction: inviteSigned }),
     };
@@ -135,7 +151,7 @@ export class GiftCommand {
         },
         { label: "Gift Link", value: code.link },
         { label: "Expires", value: this.localTime(result.expiresAt) },
-        ...(signature ? [{ label: "Tx Signature", value: signature }] : []),
+        ...this.signatureRows(signature, status),
       ],
     });
     if (!Config.dryRun) {
@@ -164,12 +180,13 @@ export class GiftCommand {
     });
     const transaction = this.requireTx(craft);
     const inviteSigned = await code.sign(transaction);
-    const signature = await this.execute(signer, inviteSigned, craft.requestId);
-    const token = await this.resolveGiftToken(info.mint);
-    const amount = this.amount(
-      info.amount,
-      token?.decimals ?? info.tokenDecimals
+    const { signature, status } = await this.execute(
+      signer,
+      inviteSigned,
+      craft.requestId
     );
+    const token = await this.resolveGiftToken(info.mint);
+    const amount = this.giftAmount(info, token);
     const valueUsd = info.tokenUsdRate
       ? Number(amount) * info.tokenUsdRate
       : null;
@@ -179,10 +196,11 @@ export class GiftCommand {
         ...(Config.dryRun && { dryRun: true }),
         receiver: signer.address,
         invite: info.inviteInfoAddress,
-        token,
+        token: token && this.tokenRef(token),
         amount,
         valueUsd,
         signature,
+        status,
         ...(Config.dryRun && { transaction: inviteSigned }),
       });
       return;
@@ -198,7 +216,7 @@ export class GiftCommand {
           label: "Amount",
           value: `${amount} ${token?.symbol ?? info.mint} (${Output.formatDollar(valueUsd ?? undefined)})`,
         },
-        ...(signature ? [{ label: "Tx Signature", value: signature }] : []),
+        ...this.signatureRows(signature, status),
       ],
     });
   }
@@ -213,10 +231,7 @@ export class GiftCommand {
       );
     }
     const token = await this.resolveGiftToken(info.mint);
-    const amount = this.amount(
-      info.amount,
-      token?.decimals ?? info.tokenDecimals
-    );
+    const amount = this.giftAmount(info, token);
     const valueUsd = info.tokenUsdRate
       ? Number(amount) * info.tokenUsdRate
       : null;
@@ -226,7 +241,7 @@ export class GiftCommand {
       Output.json({
         invite: info.inviteInfoAddress,
         inviteSigner,
-        token,
+        token: token && this.tokenRef(token),
         amount,
         valueUsd,
         expiresAt,
@@ -268,19 +283,30 @@ export class GiftCommand {
       inviteInfoAddress: invite,
     });
     const transaction = this.requireTx(craft);
-    const signature = await this.execute(signer, transaction, craft.requestId);
+    const { signature, status } = await this.execute(
+      signer,
+      transaction,
+      craft.requestId
+    );
     const token = craft.mint ? await this.resolveGiftToken(craft.mint) : null;
     const amount =
-      craft.amount && token ? this.amount(craft.amount, token.decimals) : null;
+      craft.amount && token
+        ? this.amount(
+            craft.amount,
+            token.decimals,
+            Swap.getScaledUiMultiplier(token)
+          )
+        : null;
 
     if (Output.isJson()) {
       Output.json({
         ...(Config.dryRun && { dryRun: true }),
         sender: signer.address,
         invite,
-        token,
+        token: token && this.tokenRef(token),
         amount,
         signature,
+        status,
         ...(Config.dryRun && { transaction }),
       });
       return;
@@ -296,7 +322,7 @@ export class GiftCommand {
         ...(amount && token
           ? [{ label: "Returned", value: `${amount} ${token.symbol}` }]
           : []),
-        ...(signature ? [{ label: "Tx Signature", value: signature }] : []),
+        ...this.signatureRows(signature, status),
       ],
     });
   }
@@ -379,7 +405,13 @@ export class GiftCommand {
       sender: i.sender,
       receiver: i.receiver,
       token: token ? this.tokenRef(token) : null,
-      amount: token ? this.amount(i.amount, token.decimals) : null,
+      amount: token
+        ? this.amount(
+            i.amount,
+            token.decimals,
+            Swap.getScaledUiMultiplier(token)
+          )
+        : null,
       rawAmount: i.amount,
       status,
       createdAt: this.isoFromUnix(i.creation_time),
@@ -394,18 +426,53 @@ export class GiftCommand {
     signer: Signer,
     transaction: string,
     requestId: string
-  ): Promise<string | null> {
+  ): Promise<{
+    signature: string | null;
+    status: "confirmed" | "pending" | null;
+  }> {
     if (Config.dryRun) {
-      return null;
+      return { signature: null, status: null };
     }
     const signedTransaction = await signer.signTransaction(
       transaction as Base64EncodedBytes
     );
-    const res = await InviteClient.execute({ signedTransaction, requestId });
+    const localSignature = Signer.signatureOf(signedTransaction);
+    const res = await InviteClient.execute({
+      signedTransaction,
+      requestId,
+    }).catch(async (err: unknown) => {
+      throw await Output.unconfirmedTxError(err, localSignature);
+    });
+    const signature = res.signature || localSignature;
     if (res.status === "failed" || res.status === "Failed") {
-      throw new Error(res.error ?? "Gift transaction failed.");
+      throw new Error(
+        `${res.error ?? "Gift transaction failed to land."} (signature ${signature})`
+      );
     }
-    return res.signature;
+    return {
+      signature,
+      status: res.status === "pending" ? "pending" : "confirmed",
+    };
+  }
+
+  private static signatureRows(
+    signature: string | null,
+    status: "confirmed" | "pending" | null
+  ): { label: string; value: string }[] {
+    if (!signature) {
+      return [];
+    }
+    return [
+      { label: "Tx Signature", value: signature },
+      ...(status === "pending"
+        ? [
+            {
+              label: "Status",
+              value: "Pending: not confirmed yet, check the signature",
+            },
+          ]
+        : []),
+    ];
   }
 
   private static requireTx(craft: CraftInviteTxResponse): string {
@@ -421,19 +488,32 @@ export class GiftCommand {
 
   private static async resolveGiftToken(
     mint: string | null
-  ): Promise<TokenRef | null> {
+  ): Promise<Token | null> {
     const id = this.giftMint(mint);
     const tokens = await DatapiClient.getTokensByMints([id]);
-    const token = tokens.find((t) => t.id === id);
-    return token ? this.tokenRef(token) : null;
+    return tokens.find((t) => t.id === id) ?? null;
+  }
+
+  private static giftAmount(info: InviteSummary, token: Token | null): string {
+    return token
+      ? this.amount(
+          info.amount,
+          token.decimals,
+          Swap.getScaledUiMultiplier(token)
+        )
+      : this.amount(info.amount, info.tokenDecimals);
   }
 
   private static tokenRef(token: Token): TokenRef {
     return { id: token.id, symbol: token.symbol, decimals: token.decimals };
   }
 
-  private static amount(raw: string, decimals: number): string {
-    return NumberConverter.fromChainAmount(raw, decimals);
+  private static amount(
+    raw: string,
+    decimals: number,
+    multiplier?: number
+  ): string {
+    return NumberConverter.fromChainAmount(raw, decimals, multiplier);
   }
 
   private static isoFromUnix(value: string | null | undefined): string | null {

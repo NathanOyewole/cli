@@ -6,6 +6,8 @@ Requires: an active key for `create`, `claim` and `clawback`. See [setup](setup.
 
 The gift code is the only secret: whoever has the code or link can claim the funds. The CLI derives the gift's signing keypair from the code exactly like jup.ag (`sha256("invite:" + code)`), so links work in both.
 
+`create`, `claim` and `clawback` report `status: "pending"` when Jupiter broadcast the transaction but hasn't confirmed it yet; check the `signature` before retrying. If the outcome is unknown (for example a timeout), the command fails with the signature in the error.
+
 ## Commands
 
 ### Create a gift
@@ -20,6 +22,7 @@ jup gift create --token <mint> --raw-amount 1000000 --dry-run
 - Exactly one of `--amount` or `--raw-amount` is required
 - Share `link` privately: it is the claim link
 - `--dry-run` returns the `transaction` already signed by the gift keypair; it needs only the sender's signature
+- Before submitting, the link is written to stderr so it survives a timeout or crash. If submitting fails, the error repeats the link and includes the transaction signature
 
 ```js
 // Example JSON response:
@@ -34,7 +37,8 @@ jup gift create --token <mint> --raw-amount 1000000 --dry-run
   "valueUsd": 0.9998,
   "networkFeeLamports": 2758581,
   "expiresAt": "2026-10-08T00:18:39.000Z",
-  "signature": "3dV98zG..."
+  "signature": "3dV98zG...",
+  "status": "confirmed" // "pending" if not confirmed yet; null in dry-run
 }
 ```
 
@@ -71,7 +75,8 @@ jup gift claim --code "https://jup.ag/gift#code=..." --key mykey
   "token": { "id": "So11...1112", "symbol": "SOL", "decimals": 9 },
   "amount": "0.05",
   "valueUsd": 5.89,
-  "signature": "3dV98zG..."
+  "signature": "3dV98zG...",
+  "status": "confirmed"
 }
 ```
 
@@ -91,7 +96,8 @@ jup gift clawback --code <code-or-link>
   "invite": "9ENt...hxe",
   "token": { "id": "HiNE...pump", "symbol": "FERT", "decimals": 6 },
   "amount": "45977.314229",
-  "signature": "3dV98zG..."
+  "signature": "3dV98zG...",
+  "status": "confirmed"
 }
 ```
 
