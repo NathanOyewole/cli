@@ -8,13 +8,18 @@ import { Config } from "../lib/Config.ts";
 import { LendFlashloan } from "../lib/LendFlashloan.ts";
 import { LendMath } from "../lib/LendMath.ts";
 import { LendOptions } from "../lib/LendOptions.ts";
+import { LendSmart } from "../lib/LendSmart.ts";
 import { LendTx } from "../lib/LendTx.ts";
 import { NumberConverter } from "../lib/NumberConverter.ts";
 import { Output } from "../lib/Output.ts";
 import { Signer } from "../lib/Signer.ts";
 import { LendBorrowCommand, MAX_SENTINEL } from "./LendBorrowCommand.ts";
+import { LendSmartMultiply } from "./LendSmartMultiply.ts";
 
 const MULTIPLY_COMPUTE_UNITS = 1_000_000;
+const DEFAULT_SWAP_SLIPPAGE_BPS = "10";
+const SLIPPAGE_HELP =
+  "Max slippage in basis points: the swap's (default 10), or on a smart vault the DEX deposit or withdrawal's (default twice the pool fee, else 2)";
 // Route size ladder from the jup.ag UI: try big routes first, shrink until the
 // flashloan + swap + operate transaction fits.
 const MAX_ACCOUNTS_LADDER = [64, 40, 32, 28, 20];
@@ -30,7 +35,7 @@ const FULL_CLOSE_DEBT_PAD = 0.001;
 type Opts = {
   market: LendMarket;
   key?: string;
-  slippage: string;
+  slippage?: string;
 };
 
 type Plan = {
@@ -59,9 +64,12 @@ export class LendMultiplyCommand {
       .command("open")
       .description("Open a leveraged position from collateral")
       .requiredOption("--vault <id>", "Vault ID")
-      .requiredOption("--amount <n>", "Collateral to deposit as margin")
+      .requiredOption(
+        "--amount <n>",
+        "Collateral to deposit as margin (smart vaults: in the debt token, deposited into its pair)"
+      )
       .requiredOption("--leverage <x>", "Target leverage, e.g. 3")
-      .option("--slippage <bps>", "Max swap slippage in basis points", "10")
+      .option("--slippage <bps>", SLIPPAGE_HELP)
       .addOption(LendOptions.market())
       .option("--key <name>", "Key to use for signing")
       .action((opts) => this.open(opts));
@@ -71,7 +79,7 @@ export class LendMultiplyCommand {
       .requiredOption("--position <id>", "Position ID")
       .requiredOption("--leverage <x>", "Target leverage, e.g. 2")
       .option("--vault <id>", "Vault ID (looked up from the wallet if omitted)")
-      .option("--slippage <bps>", "Max swap slippage in basis points", "10")
+      .option("--slippage <bps>", SLIPPAGE_HELP)
       .addOption(LendOptions.market())
       .option("--key <name>", "Key to use for signing")
       .action((opts) => this.set(opts));
@@ -82,7 +90,7 @@ export class LendMultiplyCommand {
       )
       .requiredOption("--position <id>", "Position ID")
       .option("--vault <id>", "Vault ID (looked up from the wallet if omitted)")
-      .option("--slippage <bps>", "Max swap slippage in basis points", "10")
+      .option("--slippage <bps>", SLIPPAGE_HELP)
       .addOption(LendOptions.market())
       .option("--key <name>", "Key to use for signing")
       .action((opts) => this.close(opts));
@@ -99,7 +107,7 @@ export class LendMultiplyCommand {
           maxApyPct:
             Math.round((s.supplyApyPct * m - s.borrowApyPct * (m - 1)) * 100) /
             100,
-          supported: v.type === 1,
+          supported: v.type === 1 || LendSmart.multiplyCtx(v) !== null,
         };
       });
 
@@ -135,6 +143,16 @@ export class LendMultiplyCommand {
     );
     this.assertSupported(vault);
     const leverage = this.parseLeverage(opts.leverage, vault);
+    if (vault.type !== 1) {
+      const signer = await Signer.load(opts.key ?? Config.load().activeKey);
+      return LendSmartMultiply.open({
+        opts,
+        vault,
+        signer,
+        amount: opts.amount,
+        leverage,
+      });
+    }
     const price = this.oraclePrice(vault);
     const supply = vault.supplyToken.token0;
     const debt = vault.borrowToken.token0;
@@ -179,6 +197,9 @@ export class LendMultiplyCommand {
     const leverage = this.parseLeverage(opts.leverage, vault);
     if (leverage === 1) {
       return this.close(opts);
+    }
+    if (vault.type !== 1) {
+      return LendSmartMultiply.set({ opts, nft, signer, leverage });
     }
     const price = this.oraclePrice(vault);
     const { collateral, debt } = LendMath.positionAmounts(nft);
@@ -246,6 +267,9 @@ export class LendMultiplyCommand {
     );
     const vault = nft.vault;
     this.assertSupported(vault);
+    if (vault.type !== 1) {
+      return LendSmartMultiply.close({ opts, nft, signer });
+    }
     const price = this.oraclePrice(vault);
     const { collateral, debt } = LendMath.positionAmounts(nft);
     const supply = vault.supplyToken.token0;
@@ -475,13 +499,11 @@ export class LendMultiplyCommand {
   }
 
   private static assertSupported(vault: Vault): void {
-    if (vault.type !== 1) {
-      throw new Error(
-        `Vault ${vault.id} is a smart (DEX) vault. Smart Multiply needs the @jup-ag/lend smart-vault SDK, which the CLI does not bundle.`
-      );
-    }
     if (!vault.metadata.multiply.enabled) {
       throw new Error(`Vault ${vault.id} does not support Multiply.`);
+    }
+    if (vault.type !== 1) {
+      LendSmartMultiply.ctx(vault);
     }
   }
 
@@ -501,7 +523,7 @@ export class LendMultiplyCommand {
     return Number(vault.oraclePrice) / 1e15;
   }
 
-  private static slippageBps(value: string): number {
+  private static slippageBps(value = DEFAULT_SWAP_SLIPPAGE_BPS): number {
     const bps = Number(value);
     if (!Number.isInteger(bps) || bps <= 0 || bps > 1000) {
       throw new Error("--slippage must be an integer between 1 and 1000.");

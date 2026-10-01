@@ -139,21 +139,19 @@ export class LendSmartOperate {
 
     const decimals = (side: VaultSide) =>
       LendMath.isSmart(side) ? SHARE_DECIMALS : side.token0.decimals;
-    const human = (raw: bigint, d: number) =>
-      Number(
-        NumberConverter.fromChainAmount((raw < 0n ? -raw : raw).toString(), d)
-      ) * (raw < 0n ? -1 : 1);
     const colDecimals = decimals(vault.supplyToken);
     const debtDecimals = decimals(vault.borrowToken);
     const before = {
-      collateral: human(current.col, colDecimals),
-      debt: human(current.debt, debtDecimals),
+      collateral: this.human(current.col, colDecimals),
+      debt: this.human(current.debt, debtDecimals),
     };
     const change = {
       collateral: col.full
         ? -before.collateral
-        : human(col.unitsDelta, colDecimals),
-      debt: debt.full ? -before.debt : human(debt.unitsDelta, debtDecimals),
+        : this.human(col.unitsDelta, colDecimals),
+      debt: debt.full
+        ? -before.debt
+        : this.human(debt.unitsDelta, debtDecimals),
     };
     const after = {
       collateral: Math.max(0, before.collateral + change.collateral),
@@ -236,16 +234,6 @@ export class LendSmartOperate {
       operate.lookupTables
     );
 
-    const legViews = (
-      side: VaultSide,
-      legs: bigint[]
-    ): LegView[] | undefined =>
-      side.token1
-        ? sideTokens(side).map((t, i) => ({
-            token: { id: t.address, symbol: t.symbol, decimals: t.decimals },
-            change: human(legs[i] ?? 0n, t.decimals),
-          }))
-        : undefined;
     const result = {
       action: p.action,
       vaultId: vault.id,
@@ -255,7 +243,7 @@ export class LendSmartOperate {
         change: change.collateral,
         amount: after.collateral,
         ...(vault.supplyToken.token1
-          ? { legs: legViews(vault.supplyToken, col.legs) }
+          ? { legs: this.legViews(vault.supplyToken, col.legs) }
           : {}),
       },
       debt: {
@@ -263,7 +251,7 @@ export class LendSmartOperate {
         change: change.debt,
         amount: after.debt,
         ...(vault.borrowToken.token1
-          ? { legs: legViews(vault.borrowToken, debt.legs) }
+          ? { legs: this.legViews(vault.borrowToken, debt.legs) }
           : {}),
       },
       ltvPct: health.ltvPct,
@@ -294,6 +282,23 @@ export class LendSmartOperate {
       return;
     }
     LendBorrowCommand.printOperate(result, signature);
+  }
+
+  public static human(raw: bigint, decimals: number): number {
+    const abs = raw < 0n ? -raw : raw;
+    const value = Number(
+      NumberConverter.fromChainAmount(abs.toString(), decimals)
+    );
+    return raw < 0n ? -value : value;
+  }
+
+  // Signed per-token moves of a smart side, one per pair token.
+  public static legViews(side: VaultSide, legs: bigint[]): LegView[] {
+    const tokens = side.token1 ? [side.token0, side.token1] : [side.token0];
+    return tokens.map((t, i) => ({
+      token: { id: t.address, symbol: t.symbol, decimals: t.decimals },
+      change: this.human(legs[i] ?? 0n, t.decimals),
+    }));
   }
 
   public static slippageBps(
