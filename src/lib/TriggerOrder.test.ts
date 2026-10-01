@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  assertIntentPair,
   assertMinDcaOrderUsd,
   assertMinOrderUsd,
   buildDcaOrderParams,
   buildPriceOrderParams,
+  getTradeSide,
   getTriggerSide,
   parseDuration,
   parseExpiry,
@@ -15,6 +17,9 @@ import {
 
 const SOL = "So11111111111111111111111111111111111111112";
 const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const USDT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
+const JUP = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
+const BONK = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
 
 describe("parseDuration", () => {
   test("parses unit suffixes and bare seconds", () => {
@@ -83,6 +88,73 @@ describe("getTriggerSide", () => {
     expect(getTriggerSide("buy-dip")).toBe("output");
     expect(getTriggerSide("buy-pump")).toBe("output");
     expect(getTriggerSide("otoco")).toBe("output");
+  });
+});
+
+describe("getTradeSide", () => {
+  test("matches jup.ag's buy/sell orientation", () => {
+    expect(getTradeSide(USDC, JUP)).toBe("buy");
+    expect(getTradeSide(SOL, JUP)).toBe("buy");
+    expect(getTradeSide(JUP, USDC)).toBe("sell");
+    expect(getTradeSide(JUP, SOL)).toBe("sell");
+    expect(getTradeSide(SOL, USDC)).toBe("sell");
+    expect(getTradeSide(USDC, SOL)).toBe("buy");
+    expect(getTradeSide(USDT, USDC)).toBe("buy");
+    expect(getTradeSide(BONK, JUP)).toBe("buy");
+  });
+});
+
+describe("assertIntentPair", () => {
+  const errorOf = (fn: () => void): string | null => {
+    try {
+      fn();
+      return null;
+    } catch (err) {
+      return (err as Error).message;
+    }
+  };
+
+  test("accepts pairs jup.ag supports", () => {
+    expect(() => assertIntentPair("take-profit", SOL, USDC)).not.toThrow();
+    expect(() => assertIntentPair("stop-loss", JUP, SOL)).not.toThrow();
+    expect(() => assertIntentPair("trailing-stop", BONK, JUP)).not.toThrow();
+    expect(() => assertIntentPair("buy-dip", USDC, JUP)).not.toThrow();
+    expect(() => assertIntentPair("buy-pump", SOL, JUP)).not.toThrow();
+    expect(() => assertIntentPair("oco", JUP, USDC)).not.toThrow();
+    expect(() => assertIntentPair("oco", SOL, USDC)).not.toThrow();
+    expect(() => assertIntentPair("otoco", USDC, JUP)).not.toThrow();
+    expect(() => assertIntentPair("otoco", SOL, JUP)).not.toThrow();
+    expect(() => assertIntentPair("otoco", USDC, SOL)).not.toThrow();
+  });
+
+  test("rejects a stablecoin trigger token", () => {
+    expect(() => assertIntentPair("take-profit", USDC, SOL)).toThrow(
+      "--intent take-profit watches the price of --from, which is a stablecoin and cannot be a trigger token. To buy with it, use --intent buy-dip, buy-pump or otoco, or swap --from and --to."
+    );
+    expect(() => assertIntentPair("buy-dip", SOL, USDT)).toThrow(
+      "--intent buy-dip watches the price of --to, which is a stablecoin and cannot be a trigger token. To sell into it, use --intent take-profit, stop-loss, trailing-stop or oco, or swap --from and --to."
+    );
+    expect(() => assertIntentPair("otoco", USDT, USDC)).toThrow(
+      "--intent otoco watches the price of --to, which is a stablecoin"
+    );
+  });
+
+  test("rejects oco unless selling into a base token", () => {
+    expect(errorOf(() => assertIntentPair("oco", SOL, JUP))).toBe(
+      "--intent oco only sells a token for USDC, USDT or SOL (e.g. --from JUP --to USDC). Swap --from and --to."
+    );
+    expect(errorOf(() => assertIntentPair("oco", BONK, JUP))).toBe(
+      "--intent oco only sells a token for USDC, USDT or SOL (e.g. --from JUP --to USDC)."
+    );
+  });
+
+  test("rejects otoco unless buying with a base token", () => {
+    expect(errorOf(() => assertIntentPair("otoco", JUP, SOL))).toBe(
+      "--intent otoco only buys a token with USDC, USDT or SOL (e.g. --from USDC --to JUP). Swap --from and --to."
+    );
+    expect(errorOf(() => assertIntentPair("otoco", BONK, JUP))).toBe(
+      "--intent otoco only buys a token with USDC, USDT or SOL (e.g. --from USDC --to JUP)."
+    );
   });
 });
 

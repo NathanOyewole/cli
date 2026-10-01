@@ -238,7 +238,7 @@ Limit orders are held in a per-wallet Jupiter vault and filled by Jupiter when t
 
 #### Sign-in
 
-Limit order and DCA commands (except the `--v1` commands) sign in to the Jupiter Trigger API by signing a text challenge with your key. This is a message signature, not a transaction. The session is cached in `~/.config/jup/auth/<address>.json` (mode 0600) and refreshed automatically. `--dry-run` still signs this challenge, and `open` registers your vault on first use, but no transaction is signed or submitted.
+Limit order and DCA commands (except the `--v1` commands) sign in to the Jupiter Trigger API by signing a text challenge with your key. This is a message signature, not a transaction. The session is cached in `~/.config/jup/auth/<address>.json` (mode 0600) and refreshed automatically. `--dry-run` still signs this challenge and caches the session, and `open --dry-run` registers your vault on first use (a one-time, fund-free server-side step), but no transaction is signed or submitted.
 
 #### Place a limit order
 
@@ -283,7 +283,7 @@ jup spot limit open --from SOL --to USDC --amount 1 --intent take-profit --price
 - `--mcap` reads `--price`, `--tp` and `--sl` as market caps in USD (converted with the token's circulating supply)
 - `--slippage` (bps) applies to every leg of the order. When omitted, stop-loss legs, trailing stops and `buy-pump` use 2000 (20%) and everything else lets Jupiter pick (`null`), matching jup.ag
 - `--expiry` defaults to `7d`. Presets `1h`, `1d`, `7d`, `30d`, or any duration (`30m`, `12h`, `2w`, `1mo`, or seconds), up to 10 years
-- Stablecoins cannot be trigger tokens and some pairs are unsupported; the command checks the pair before depositing
+- Pairs follow jup.ag's orientation: `oco` sells a token for USDC, USDT or SOL, `otoco` buys one with them, and a stablecoin (USDC, USDT) is never the watched token. Other unsupported pairs are rejected by Jupiter's pair check before depositing
 - `--dry-run` returns the unsigned deposit `transaction` without creating the order
 
 ```js
@@ -385,12 +385,14 @@ jup spot limit close --order <orderId>
 jup spot limit close --order <orderId> --dry-run
 ```
 
-- Cancelling withdraws the remaining input from the vault back to your wallet. `--dry-run` requests and returns the unsigned withdrawal `transaction` without confirming the cancel
+- Cancelling withdraws the remaining input from the vault back to your wallet
+- `--dry-run` only reads the order and shows what would be withdrawn, with `transaction: null`. Jupiter builds the withdrawal transaction only when a cancel starts, and starting a cancel stops the order from filling, so a dry run must not request it
 
 ```js
 // Example JSON response:
 {
   "orderId": "01a0f4bc-...",
+  "state": "open", // order state before the cancel
   "inputToken": { "id": "So11...1112", "symbol": "SOL", "decimals": 9 },
   "remainingInAmount": "1", // amount withdrawn
   "signature": "4xK29zH..."
@@ -409,7 +411,7 @@ jup spot limit close --v1 --order all # cancel every open V1 order
 ```
 
 - V1 orders use the same list shape, with `orderType: "v1"`, `intent: null`, no trigger prices, and `outAmount` set to the requested output amount
-- V1 `close` returns `{ "orderIds": [...], "signatures": [...] }` (one transaction per batch of up to 5 orders); `--dry-run` returns the unsigned `transactions`
+- V1 `close` returns `{ "orderIds": [...], "signatures": [...] }` (one transaction per batch of up to 5 orders); `--dry-run` returns the unsigned `transactions`. If a transaction fails to land, the command stops and the error lists the signatures of batches that already landed
 
 ### DCA (recurring) orders
 
@@ -500,13 +502,14 @@ jup spot dca close --order <orderId>
 jup spot dca close --order <orderId> --dry-run
 ```
 
-- `--dry-run` requests and returns the unsigned withdrawal `transaction` without confirming the cancel
+- `--dry-run` only reads the order and shows what would be withdrawn, with `transaction: null`, for the same reason as [limit `close`](#cancel-a-limit-order): requesting the withdrawal transaction starts the cancel
 - Legacy V1 DCA orders are closed with `jup spot dca close --v1 --order <order-account>`. The CLI builds the close transaction itself and sends it through your RPC (`jup config set --rpc-url`); unspent input and bought tokens return to your wallet, and wrapped SOL is unwrapped.
 
 ```js
 // Example JSON response:
 {
   "orderId": "01a0f4bc-...",
+  "state": "active", // order state before the cancel
   "inputToken": { "id": "EPjF...USDC", "symbol": "USDC", "decimals": 6 },
   "remainingInAmount": "70", // amount withdrawn
   "ordersRemaining": 7,

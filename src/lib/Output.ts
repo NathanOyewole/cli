@@ -31,6 +31,15 @@ export class Output {
   }
 
   public static async error(err: unknown): Promise<void> {
+    const message = await this.errorMessage(err);
+    if (this.isJson()) {
+      this.json({ error: message });
+    } else {
+      console.log(`${chalk.red.bold("Error:")} ${message}`);
+    }
+  }
+
+  public static async errorMessage(err: unknown): Promise<string> {
     let message: string;
     if (err instanceof HTTPError) {
       // Best effort to extract message from the response body, which may be JSON or plain text
@@ -50,11 +59,7 @@ export class Output {
     } else {
       message = err instanceof Error ? err.message : String(err);
     }
-    if (this.isJson()) {
-      this.json({ error: message });
-    } else {
-      console.log(`${chalk.red.bold("Error:")} ${message}`);
-    }
+    return message;
   }
 
   public static table(opts: HorizontalTable | VerticalTable): void {

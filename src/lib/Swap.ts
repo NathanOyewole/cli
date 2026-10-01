@@ -13,12 +13,13 @@ import {
 } from "../clients/UltraClient.ts";
 import { Config } from "./Config.ts";
 import { NumberConverter } from "./NumberConverter.ts";
-import type { Signer } from "./Signer.ts";
+import { Signer } from "./Signer.ts";
 
 export type SwapResult = {
   signer: Signer;
   order: GetOrderResponse;
   result: PostExecuteResponse | null;
+  signature: string | null;
   inputToken: Token;
   outputToken: Token;
   inAmount: string;
@@ -117,6 +118,7 @@ export class Swap {
         signer,
         order,
         result: null,
+        signature: null,
         inputToken,
         outputToken,
         inAmount,
@@ -132,14 +134,15 @@ export class Swap {
       requestId: order.requestId,
       signedTransaction: signedTx,
     });
+    this.assertExecuted(result);
 
     const inAmount = NumberConverter.fromChainAmount(
-      result.inputAmountResult,
+      result.inputAmountResult ?? order.inAmount,
       inputToken.decimals,
       inputMultiplier
     );
     const outAmount = NumberConverter.fromChainAmount(
-      result.outputAmountResult,
+      result.outputAmountResult ?? order.outAmount,
       outputToken.decimals,
       outputMultiplier
     );
@@ -148,12 +151,31 @@ export class Swap {
       signer,
       order,
       result,
+      signature: result.signature ?? Signer.signatureOf(signedTx),
       inputToken,
       outputToken,
       inAmount,
       outAmount,
       networkFeeLamports,
     };
+  }
+
+  // Ultra reports a failed landing as HTTP 200 with status "Failed".
+  public static assertExecuted(result: {
+    status: string;
+    code: number;
+    error?: string | null | undefined;
+    signature?: string | null | undefined;
+  }): void {
+    if (result.status !== "Failed") {
+      return;
+    }
+    const reason =
+      result.error ??
+      "Transaction failed to land. Check your balance and try again.";
+    throw new Error(
+      `${reason} (code ${result.code}${result.signature ? `, signature ${result.signature}` : ""})`
+    );
   }
 
   // In ExactOut mode the amount denominates the output token.

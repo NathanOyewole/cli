@@ -2,6 +2,7 @@ import {
   address,
   compileTransaction,
   createTransactionMessage,
+  getBase58Decoder,
   getBase64Codec,
   getBase64EncodedWireTransaction,
   getPublicKeyFromAddress,
@@ -59,6 +60,23 @@ describe("signTransaction", () => {
 
     expect(wrongSigner.signTransaction(unsignedTx)).rejects.toThrow(
       "Attempted to sign a transaction with an address that is not a signer for it"
+    );
+  });
+});
+
+describe("signatureOf", () => {
+  test("returns the fee payer's signature in base58", async () => {
+    const signer = await Signer.generate();
+    const signedTx = await signer.signTransaction(
+      createUnsignedTransaction(signer.address)
+    );
+    const decodedTx = getTransactionCodec().decode(
+      getBase64Codec().encode(signedTx)
+    );
+    const feePayerSignature = decodedTx.signatures[address(signer.address)]!;
+
+    expect(Signer.signatureOf(signedTx)).toBe(
+      getBase58Decoder().decode(feePayerSignature)
     );
   });
 });
