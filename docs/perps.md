@@ -419,7 +419,7 @@ jup perps loans history [--key <name> | --address <wallet>] [--limit 20]
 # Deposit JLP and borrow USDC (either option alone also works)
 jup perps loans borrow --deposit 100 --amount 200
 
-# Repay USDC and/or withdraw JLP ('max' repays everything / withdraws the most allowed)
+# Repay USDC and/or withdraw JLP ('max' repays everything / withdraws the most allowed once the repay applies)
 jup perps loans repay --amount 50
 jup perps loans repay --amount max --withdraw max
 ```

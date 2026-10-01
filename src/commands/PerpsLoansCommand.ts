@@ -265,7 +265,7 @@ export class PerpsLoansCommand {
           : "0";
     const withdraw =
       opts.withdraw === "max"
-        ? position!.maxWithdrawTokenAmount
+        ? await this.maxWithdrawAfterRepay(signer.address, repay, position!)
         : opts.withdraw
           ? NumberConverter.toChainAmount(opts.withdraw, JLP.decimals)
           : "0";
@@ -285,6 +285,27 @@ export class PerpsLoansCommand {
           ? null
           : NumberConverter.fromChainAmount(withdraw, JLP.decimals),
     });
+  }
+
+  // Repaying frees collateral, so with a repay the web takes the max withdraw
+  // from a repay-only quote rather than the position's current limit.
+  private static async maxWithdrawAfterRepay(
+    walletAddress: string,
+    repayTokenAmount: string,
+    position: LoanPosition
+  ): Promise<string> {
+    if (repayTokenAmount === "0") {
+      return position.maxWithdrawTokenAmount;
+    }
+    const quote = await JlpClient.postRepayWithdraw({
+      walletAddress,
+      repayTokenAmount,
+      withdrawTokenAmount: "0",
+    });
+    return (
+      quote.maxWithdrawTokenAmountBeforeWithdraw ??
+      position.maxWithdrawTokenAmount
+    );
   }
 
   private static async submit(
