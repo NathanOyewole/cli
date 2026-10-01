@@ -39,6 +39,19 @@ export class Output {
     }
   }
 
+  // For failures after a signed transaction may have reached the network:
+  // the outcome is unknown, so a blind retry could act twice.
+  public static async unconfirmedTxError(
+    reason: unknown,
+    signature: string
+  ): Promise<Error> {
+    const message =
+      typeof reason === "string" ? reason : await this.errorMessage(reason);
+    return new Error(
+      `${message.replace(/\.?$/, ".")} Transaction ${signature} may still land; check it on an explorer before retrying.`
+    );
+  }
+
   public static async errorMessage(err: unknown): Promise<string> {
     let message: string;
     if (err instanceof HTTPError) {

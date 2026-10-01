@@ -126,6 +126,8 @@ jup stake native convert --stake-account <address> --amount 2
 
 Other actions return the fields that apply: `deposit` returns the new `stakeAccount`, `amount` and `rentLamports`; `merge` returns `mergedStakeAccounts`; `convert` returns `amount` (null for the whole account) and `outAmount` (JupSOL received).
 
+If a signed transaction may already have been sent but its outcome is unknown (a timeout, a non-success status, or a network error), the command fails with an error that includes the transaction signature. Check the signature on an explorer before retrying, because the transaction may still land. This applies to the JupSOL commands too.
+
 ### JupSOL
 
 ```bash

@@ -86,3 +86,25 @@ describe("formatDollar", () => {
     expect(result).toContain("50");
   });
 });
+
+describe("unconfirmedTxError", () => {
+  test("appends the signature and a check-before-retry hint", async () => {
+    const err = await Output.unconfirmedTxError(
+      "Transaction timed out",
+      "5sig"
+    );
+    expect(err.message).toBe(
+      "Transaction timed out. Transaction 5sig may still land; check it on an explorer before retrying."
+    );
+  });
+
+  test("uses the message of an error without doubling its period", async () => {
+    const err = await Output.unconfirmedTxError(
+      new Error("socket hang up."),
+      "5sig"
+    );
+    expect(err.message).toBe(
+      "socket hang up. Transaction 5sig may still land; check it on an explorer before retrying."
+    );
+  });
+});
