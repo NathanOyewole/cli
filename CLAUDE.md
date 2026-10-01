@@ -32,7 +32,11 @@ bun run ci
 - `KeysCommand` — `keys list/add/delete/edit/use/solana-import`
 - `LendCommand` — `lend earn tokens/positions/deposit/withdraw`
 - `PerpsCommand` — `perps positions/markets/open/set/close`
-- `PredictionsCommand` — `predictions events/positions/open/close/history`
+- `PredictionsCommand` — `predictions events/positions/open/close/history`; registers the predictions subcommand files below
+- `PredictionsDiscoveryCommand` — `predictions categories/suggested/market/timed/score/price-history/trades/orderbook`
+- `PredictionsAccountCommand` — `predictions orders/claim/leaderboard/profile/pnl/set-username`
+- `PredictionsArcadeCommand` — `predictions arcade rounds/open/positions/history`
+- `PredictionsCommunityCommand` — `predictions clans ...`, `predictions comments list/post/like/delete`
 - `SignCommand` — `sign --tx <base64>`
 - `SpotCommand` — `spot tokens/quote/swap/portfolio/transfer/reclaim`
 - `UpdateCommand` — `update` (self-update CLI to latest version)
@@ -47,6 +51,9 @@ bun run ci
 - `Output` — renders data as table (via cli-table3) or JSON based on config; also provides display formatters (`formatDollar`, `formatBoolean`, `formatPercentageChange`)
 - `NumberConverter` — converts between human-readable and on-chain decimal amounts
 - `Swap` — shared swap execution logic used by SpotCommand and LendCommand
+- `PredictionsExecution` — signs server-built Predict transactions, submits them to `/execute` with their execution context, and polls for order fills
+- `PredictionsAuth` — wallet-signed message templates and comment session keys for Predict's off-chain actions (clans, usernames, comments)
+- `PredictionsFormat` — shared Predict output helpers (event JSON, dates, `--key`/`--address` resolution)
 
 **API Clients** (`src/clients/`):
 
@@ -54,7 +61,10 @@ bun run ci
 - `UltraClient` — Jupiter Ultra swap API (quote + execute)
 - `PerpsClient` — Jupiter Perps API v2 (positions, orders, TP/SL)
 - `LendClient` — Jupiter Lend API (earn tokens, positions, earnings)
-- `PredictionsClient` — Jupiter Predictions API v1 (events, positions, orders, history)
+- `PredictionsClient` — Jupiter Predictions API v1 (events, markets, positions, orders, tickets, claims, history, profiles, leaderboards)
+- `PredictionsArcadeClient` — Predictions API v1 `play/*` (1-minute arcade rounds and bets)
+- `PredictionsCommunityClient` — Predictions API v1 clans, comments, and usernames (wallet-signed messages)
+- `PredictionsPriceClient` — Predict price service (price-to-beat REST, one-shot orderbook WebSocket)
 - `VrfdClient` — Jupiter Token Verification API (eligibility check, payment, execute)
 
 **Spot swap flow:** token search → Swap.execute → UltraClient.getOrder → Signer.signTransaction → UltraClient.postExecute
@@ -63,7 +73,9 @@ bun run ci
 
 **Lend deposit/withdraw flow:** LendClient.getTokens → resolve jlToken → Swap.execute → LendClient.getPositions (updated state)
 
-**Predictions flow:** PredictionsClient.postOrder → Signer.signTransaction → PredictionsClient.postExecute
+**Predictions flow:** PredictionsClient.postOrder → Signer.signTransaction → PredictionsClient.postExecute (echoes `execution.context`) → PredictionsExecution.waitForFill (orders, then history)
+
+**Predictions social flow:** PredictionsAuth message → Signer.signMessage → PredictionsCommunityClient (comments add a session key that signs each write)
 
 **Vrfd flow:** VrfdClient.checkEligibility → VrfdClient.craftTxn → Signer.signTransaction → VrfdClient.execute
 
