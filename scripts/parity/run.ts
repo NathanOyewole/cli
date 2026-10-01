@@ -305,6 +305,7 @@ try {
       let [verdict, detail] = await check(c);
       // Live markets move between build and simulation; a real defect fails twice.
       if (verdict === "FAIL") {
+        await Bun.sleep(5000);
         const [retried, retryDetail] = await check(c);
         if (retried !== "FAIL") {
           [verdict, detail] = [
