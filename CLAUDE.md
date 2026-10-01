@@ -38,6 +38,7 @@ bun run ci
 - `PerpsJlpCommand` — `perps jlp info/mint/burn`
 - `PerpsLoansCommand` — `perps loans info/positions/history/borrow/repay`
 - `PerpsLeaderboardCommand` — `perps leaderboard/stats`
+- `PerpsJtxCommand` — `perps jtx markets/orderbook/positions/history/open/close/set` (orderbook markets on gum-api)
 - `PortfolioCommand` — `portfolio positions/pnl/airdrops`, `portfolio addressbook list/add/remove`
 - `PredictionsCommand` — `predictions events/positions/open/close/history`; registers the predictions subcommand files below
 - `PredictionsAccountCommand` — `predictions orders/claim/leaderboard/profile/pnl/set-username`
@@ -67,6 +68,8 @@ bun run ci
 - `Output` — renders data as table (via cli-table3) or JSON based on config; also provides display formatters (`formatDollar`, `formatCompactDollar`, `formatBoolean`, `formatPercentageChange`)
 - `NumberConverter` — converts between human-readable and on-chain decimal amounts
 - `Swap` — shared swap execution logic used by SpotCommand and LendCommand; manual swap settings and Shield token warnings
+- `JtxOrder` — JTX order sizing (collateral × leverage within margin and fee), price/size snapping, order limits
+- `JupStake` — reads a wallet's max-locked staked JUP from the governance escrow (JTX private-beta gate)
 - `PerpsTx` — perps sign helpers: `signAndExecute` (perps-api `/transaction/execute`) and `signAndSend` (straight to RPC via `Rpc`), plus `--key`/`--address` resolution
 - `TriggerOrder` — pure limit/DCA order logic: intent → payload mapping, target prices (USD, market cap, % from market), expiry/interval parsing, minimums
 - `OrderTokens` — token metadata lookup for order lists (symbols, decimals, UI amounts)
@@ -95,6 +98,7 @@ bun run ci
 - `UltraClient` — Jupiter Ultra swap API (quote + execute)
 - `PerpsClient` — Jupiter Perps API v2 (positions, orders, TP/SL, pool info, collateral limits, expired orders, leaderboard, CSV export)
 - `JlpClient` — Perps API v2 JLP pool (info, mint, burn) and JLP loans
+- `JtxPerpsClient` — JTX orderbook perps API (gum-api): markets, order book, trading accounts, cross-chain intents
 - `LendClient` — Jupiter Lend API (earn tokens, positions, earnings)
 - `PredictionsClient` — Jupiter Predictions API v1 (events, markets, positions, orders, tickets, claims, history, profiles, leaderboards)
 - `PredictionsArcadeClient` — Predictions API v1 `play/*` (1-minute arcade rounds and bets)
@@ -112,6 +116,8 @@ bun run ci
 **Spot swap flow:** token search → Swap.execute → UltraClient.getOrder → Signer.signTransaction → UltraClient.postExecute
 
 **Perps flow:** PerpsClient.post* → Signer.signTransaction → PerpsClient.postExecute
+
+**JTX flow:** JtxPerpsClient.post{CreateOrder,CancelOrder,Collateral} → Signer.signTransaction → JtxPerpsClient.postExecute → poll order history
 
 **JLP / loans / expired-order flow:** JlpClient.post* (or PerpsClient.getExpiredOrders) → Signer.signTransaction → Rpc.sendAndConfirm
 

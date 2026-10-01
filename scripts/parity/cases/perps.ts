@@ -1,3 +1,10 @@
+import {
+  address,
+  getAddressEncoder,
+  getProgramDerivedAddress,
+} from "@solana/kit";
+
+import { decodeActiveStake } from "../../../src/lib/JupStake.ts";
 import { WALLET, type ParityCase } from "../types.ts";
 
 const PERPS_API = "https://perps-api.jup.ag/v2";
@@ -151,15 +158,21 @@ type CollateralLimits = Record<string, string>;
 const DECIMALS: Record<string, number> = { SOL: 9, BTC: 8, ETH: 8, USDC: 6 };
 
 async function rpc<T>(method: string, params: unknown[]): Promise<T> {
-  const res = await fetch(
-    process.env.RPC_URL ?? "https://api.mainnet-beta.solana.com",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(
+      process.env.RPC_URL ?? "https://api.mainnet-beta.solana.com",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      }
+    );
+    if (res.status === 429 && attempt < 5) {
+      await Bun.sleep(2000 * (attempt + 1));
+      continue;
     }
-  );
-  return ((await res.json()) as { result: T }).result;
+    return ((await res.json()) as { result: T }).result;
+  }
 }
 
 async function balanceOf(wallet: string, mint: string): Promise<bigint> {
@@ -278,6 +291,119 @@ const withLoan = (match: (p: LoanPosition) => boolean) => async () => {
   }
   throw new Error("no recent loan wallet matches");
 };
+
+const JTX_API = "https://gum-api.jup.net/fe/mainnet-beta/perps";
+const JTX_GATEWAY = "gumhFpP3saWX8arwLx4peMZ6kBBXXbL7RWVuMtCjedY";
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+type JtxTrader = {
+  wallet: string;
+  positions: { symbol: string; size: string; markPrice: string }[];
+  orders: { orderId: string }[];
+  usdc: bigint;
+  stakedJup: bigint;
+};
+
+async function jtxGet<T>(path: string): Promise<T> {
+  const res = await fetch(`${JTX_API}/${path}`);
+  if (!res.ok) {
+    throw new Error(`${path}: HTTP ${res.status}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+async function stakedJup(wallet: string): Promise<bigint> {
+  const encoder = getAddressEncoder();
+  const program = address("voTpe3tHQ7AjQHMapgSue2HJFAh2cGsdokqN3XqmVSj");
+  const [locker] = await getProgramDerivedAddress({
+    programAddress: program,
+    seeds: [
+      "Locker",
+      encoder.encode(address("bJ1TRoFo2P6UHVwqdiipp6Qhp2HaaHpLowZ5LHet8Gm")),
+    ],
+  });
+  const [escrow] = await getProgramDerivedAddress({
+    programAddress: program,
+    seeds: ["Escrow", encoder.encode(locker), encoder.encode(address(wallet))],
+  });
+  const info = await rpc<{ value: { data: [string, string] } | null }>(
+    "getAccountInfo",
+    [escrow, { encoding: "base64" }]
+  );
+  return info.value
+    ? decodeActiveStake(Buffer.from(info.value.data[0], "base64"))
+    : 0n;
+}
+
+let jtxTradersPromise: Promise<JtxTrader[]> | undefined;
+
+// Wallets that recently sent JTX cross-chain intents (fee payers of txs on
+// the gateway program), with their positions, orders, USDC, and staked JUP.
+function jtxTraders(): Promise<JtxTrader[]> {
+  jtxTradersPromise ??= (async () => {
+    const sigs = await rpc<{ signature: string; err: unknown }[]>(
+      "getSignaturesForAddress",
+      [JTX_GATEWAY, { limit: 40 }]
+    );
+    const wallets = new Set<string>();
+    for (const { signature, err } of sigs) {
+      if (err || wallets.size >= 8) {
+        continue;
+      }
+      const tx = await rpc<{
+        transaction: { message: { accountKeys: string[] } };
+      } | null>("getTransaction", [
+        signature,
+        { maxSupportedTransactionVersion: 0, encoding: "json" },
+      ]);
+      const payer = tx?.transaction.message.accountKeys[0];
+      if (payer) {
+        wallets.add(payer);
+      }
+    }
+    const traders: JtxTrader[] = [];
+    for (const wallet of wallets) {
+      const [account] = await getProgramDerivedAddress({
+        programAddress: address("jtxQHH3ysuWRETjaynai3jowPztq2LBJApVFcEv4Wmg"),
+        seeds: [
+          "cross_margin",
+          getAddressEncoder().encode(address(wallet)),
+          Uint8Array.of(255),
+        ],
+      });
+      const [positions, orders] = await Promise.all([
+        jtxGet<JtxTrader["positions"]>(`tradingAccount/${account}/positions`),
+        jtxGet<JtxTrader["orders"]>(`tradingAccount/${account}/orders`),
+      ]).catch(() => [[], []] as [JtxTrader["positions"], JtxTrader["orders"]]);
+      traders.push({
+        wallet,
+        positions,
+        orders,
+        usdc: await balanceOf(wallet, USDC_MINT),
+        stakedJup: await stakedJup(wallet),
+      });
+    }
+    return traders;
+  })();
+  return jtxTradersPromise;
+}
+
+const withJtxTrader =
+  (
+    match: (t: JtxTrader) => boolean,
+    vars: (t: JtxTrader) => Record<string, string> = () => ({})
+  ) =>
+  async () => {
+    const trader = (await jtxTraders()).find(match);
+    if (!trader) {
+      throw new Error("no recent JTX wallet matches");
+    }
+    return { WALLET: trader.wallet, ...vars(trader) };
+  };
+
+// Opening needs USDC for collateral and the 69 JUP private-beta stake.
+const canOpenJtx = (t: JtxTrader) =>
+  t.usdc >= 15_000_000n && t.stakedJup >= 69_000_000n;
 
 const hasItems = (key: string) => (json: unknown) =>
   Array.isArray((json as Record<string, unknown>)[key]) &&
@@ -637,5 +763,179 @@ export const cases: ParityCase[] = [
       return { WALLET: board.topTradersByVolume[0]!.owner };
     },
     expect: (json) => ((json as { volumeUsd?: number }).volumeUsd ?? 0) > 0,
+  },
+  {
+    id: "jtx-markets",
+    feature: "perps-direction",
+    kind: "read",
+    args: ["perps", "jtx", "markets"],
+    expect: (json) =>
+      Array.isArray(json) &&
+      json.some((m) => m.asset === "JUP") &&
+      json.every((m) => typeof m.fundingRatePctPerHour === "number"),
+  },
+  {
+    id: "jtx-orderbook",
+    feature: "perps-order",
+    kind: "read",
+    args: ["perps", "jtx", "orderbook", "--asset", "JUP", "--depth", "5"],
+    expect: hasItems("bids"),
+  },
+  {
+    id: "jtx-positions",
+    feature: "perps-positions",
+    kind: "read",
+    args: ["perps", "jtx", "positions", "--address", WALLET],
+    resolve: withJtxTrader((t) => t.positions.length > 0),
+    expect: hasItems("positions"),
+  },
+  {
+    id: "jtx-order-history",
+    feature: "perps-positions",
+    kind: "read",
+    args: ["perps", "jtx", "history", "--address", WALLET, "--limit", "5"],
+    resolve: withJtxTrader((t) => t.positions.length > 0),
+    expect: hasItems("orders"),
+  },
+  {
+    id: "jtx-trades",
+    feature: "perps-positions",
+    kind: "read",
+    args: ["perps", "jtx", "history", "--address", WALLET, "--type", "trades"],
+    resolve: withJtxTrader((t) => t.positions.length > 0),
+    expect: hasItems("trades"),
+  },
+  {
+    id: "jtx-funding-history",
+    feature: "perps-positions",
+    kind: "read",
+    args: ["perps", "jtx", "history", "--address", WALLET, "--type", "funding"],
+    resolve: withJtxTrader((t) => t.positions.length > 0),
+    expect: (json) => Array.isArray((json as { funding?: unknown }).funding),
+  },
+  {
+    id: "jtx-open-market",
+    feature: "perps-direction",
+    kind: "tx",
+    args: [
+      "perps",
+      "jtx",
+      "open",
+      "--asset",
+      "JUP",
+      "--side",
+      "long",
+      "--amount",
+      "10",
+      "--leverage",
+      "3",
+    ],
+    resolve: withJtxTrader(canOpenJtx),
+  },
+  {
+    id: "jtx-open-limit",
+    feature: "perps-order",
+    kind: "tx",
+    args: [
+      "perps",
+      "jtx",
+      "open",
+      "--asset",
+      "HYPE",
+      "--side",
+      "short",
+      "--amount",
+      "10",
+      "--size",
+      "20",
+      "--limit",
+      "$LIMIT",
+    ],
+    resolve: async () => {
+      const markets =
+        await jtxGet<{ symbol: string; markPrice: number }[]>("markets");
+      const hype = markets.find((m) => m.symbol === "HYPE")!;
+      return {
+        ...(await withJtxTrader(canOpenJtx)()),
+        LIMIT: (hype.markPrice * 1.05).toFixed(2),
+      };
+    },
+  },
+  {
+    id: "jtx-close-partial",
+    feature: "perps-positions",
+    kind: "tx",
+    args: ["perps", "jtx", "close", "--asset", "$ASSET", "--size", "$SIZE"],
+    resolve: withJtxTrader(
+      (t) => t.positions.some((p) => Number(p.size) * Number(p.markPrice) > 20),
+      (t) => {
+        const p = t.positions.find(
+          (p) => Number(p.size) * Number(p.markPrice) > 20
+        )!;
+        return { ASSET: p.symbol, SIZE: "10" };
+      }
+    ),
+  },
+  {
+    id: "jtx-close-full",
+    feature: "perps-positions",
+    kind: "tx",
+    args: ["perps", "jtx", "close", "--asset", "$ASSET"],
+    resolve: withJtxTrader(
+      (t) => t.positions.length > 0,
+      (t) => ({ ASSET: t.positions[0]!.symbol })
+    ),
+  },
+  {
+    id: "jtx-cancel-order",
+    feature: "perps-positions",
+    kind: "tx",
+    args: ["perps", "jtx", "close", "--order", "$ORDER"],
+    resolve: withJtxTrader(
+      (t) => t.orders.length > 0,
+      (t) => ({ ORDER: t.orders[0]!.orderId })
+    ),
+  },
+  {
+    id: "jtx-add-collateral",
+    feature: "perps-positions",
+    kind: "tx",
+    args: ["perps", "jtx", "set", "--asset", "$ASSET", "--add-collateral", "5"],
+    resolve: withJtxTrader(
+      (t) => t.positions.length > 0 && t.usdc >= 10_000_000n,
+      (t) => ({ ASSET: t.positions[0]!.symbol })
+    ),
+  },
+  {
+    id: "jtx-remove-collateral",
+    feature: "perps-positions",
+    kind: "tx",
+    args: [
+      "perps",
+      "jtx",
+      "set",
+      "--asset",
+      "$ASSET",
+      "--remove-collateral",
+      "1",
+    ],
+    resolve: async () => {
+      for (const t of await jtxTraders()) {
+        const { accounts } = (await (
+          await fetch(`${JTX_API}/tradingAccount`, {
+            headers: { "X-PUBKEY": t.wallet },
+          })
+        ).json()) as {
+          accounts: { market: string | null; data: { freeBalance: string } }[];
+        };
+        const funded = accounts.find(
+          (a) => a.market && Number(a.data.freeBalance) > 5
+        );
+        if (funded) {
+          return { WALLET: t.wallet, ASSET: funded.market! };
+        }
+      }
+      throw new Error("no recent JTX wallet has free collateral");
+    },
   },
 ];

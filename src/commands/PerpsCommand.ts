@@ -13,6 +13,7 @@ import { PerpsTx } from "../lib/PerpsTx.ts";
 import { Signer } from "../lib/Signer.ts";
 import { PerpsCollateral } from "./PerpsCollateral.ts";
 import { PerpsJlpCommand } from "./PerpsJlpCommand.ts";
+import { PerpsJtxCommand } from "./PerpsJtxCommand.ts";
 import { PerpsLeaderboardCommand } from "./PerpsLeaderboardCommand.ts";
 import { PerpsLoansCommand } from "./PerpsLoansCommand.ts";
 
@@ -121,6 +122,7 @@ export class PerpsCommand {
     PerpsJlpCommand.register(perps);
     PerpsLoansCommand.register(perps);
     PerpsLeaderboardCommand.register(perps);
+    PerpsJtxCommand.register(perps);
   }
 
   private static async positions(opts: {
@@ -352,6 +354,11 @@ export class PerpsCommand {
 
     const side = PerpsTx.normalizeSide(opts.side);
     const asset = opts.asset.toUpperCase();
+    if (!["SOL", "BTC", "ETH"].includes(asset)) {
+      throw new Error(
+        `${asset} is not a JLP-pool market (SOL, BTC, ETH). Orderbook markets such as JUP, HYPE, and ZEC trade with 'jup perps jtx open --asset ${asset} ...'.`
+      );
+    }
     const inputToken = opts.input.toUpperCase();
     const signer = await Signer.load(opts.key ?? Config.load().activeKey);
 

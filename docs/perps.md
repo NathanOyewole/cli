@@ -4,7 +4,7 @@ Requires: an active key for write commands. Read commands (`markets`, `jlp info`
 
 ## Markets
 
-Three perpetual markets are available: **SOL**, **BTC**, and **ETH**. Collateral can be deposited in SOL, BTC, ETH, or USDC. Minimum collateral is $10 for new positions.
+The JLP pool markets are **SOL**, **BTC**, and **ETH**. Collateral can be deposited in SOL, BTC, ETH, or USDC. Minimum collateral is $10 for new positions. Orderbook markets (JUP, HYPE, ZEC, and others) use `jup perps jtx`, see [below](#orderbook-jtx-markets-jup-hype-zec-spcx-sndk-skhynix).
 
 ## Commands
 
@@ -523,6 +523,155 @@ jup perps stats --address <wallet-address> --asset ETH --week current
   "pnlUsd": 48326.33,
   "volumeUsd": 518839.94
 }
+```
+
+### Orderbook (JTX) markets: JUP, HYPE, ZEC, SPCX, SNDK, SKHYNIX
+
+Jupiter's orderbook perps run on a separate venue. They live under `jup perps jtx` because they work differently from the SOL/BTC/ETH pool markets: collateral is always USDC and held in an isolated account per market, positions are identified by market (not a pubkey), orders have IDs, and there is no TP/SL. `jup perps open --asset JUP` points here.
+
+Orders, cancels, and collateral moves are cross-chain intents: the API builds a Solana transaction, you sign it, and it is submitted to the JTX execute endpoint. After submission the CLI polls order history for up to 20 seconds to report the fill status.
+
+Opening positions is a private beta: the wallet needs at least 69 JUP staked with max lock (checked on-chain before building, as the web does). Closing, cancelling, and collateral changes are not gated.
+
+```bash
+jup perps jtx markets
+jup perps jtx orderbook --asset JUP --depth 10
+jup perps jtx positions [--key <name> | --address <wallet>]
+jup perps jtx history [--type orders|trades|funding] [--asset JUP] [--limit 20]
+
+# Market order: 10 USDC collateral at 3x (size ~ $30)
+jup perps jtx open --asset JUP --side long --amount 10 --leverage 3
+
+# Limit order with an explicit USD size
+jup perps jtx open --asset HYPE --side short --amount 20 --size 60 --limit 95
+
+# Close fully (market), partly ($25 of size), or with a limit order
+jup perps jtx close --asset JUP
+jup perps jtx close --asset JUP --size 25
+jup perps jtx close --asset JUP --limit 0.36
+
+# Cancel an open order (order ID or client order ID from `positions`)
+jup perps jtx close --order <orderId>
+
+# Move USDC in or out of a market's isolated account
+jup perps jtx set --asset JUP --add-collateral 20
+jup perps jtx set --asset JUP --remove-collateral 10
+```
+
+- `--amount` is USDC collateral (minimum 10). Leverage is 1.1x up to the market's `maxLeverage`.
+- Market orders carry a worst price (`priceUsd`) 1% past the mark; they are rejected when the book is thin (`marketOrders: false` in `markets`), use `--limit` then.
+- Deposits are at least 5 USDC; withdrawals are capped at 95% of the account's free balance.
+
+```js
+// Example JSON response (markets):
+[
+  {
+    "asset": "JUP",
+    "priceUsd": 0.33001,
+    "changePct24h": -0.52,
+    "highUsd24h": 0.34195,
+    "lowUsd24h": 0.3251,
+    "volumeUsd24h": 103374.21,
+    "openInterestUsd": 83546.12,
+    "maxLeverage": 10,
+    "takerFeePct": 0.035,
+    "makerFeePct": 0.005,
+    "fundingRatePctPerHour": 0.008285, // positive: longs pay shorts
+    "nextFundingTime": "2026-10-01T12:00:00.000Z",
+    "marketOrders": true // false when only limit orders are accepted
+  }
+]
+
+// Example JSON response (orderbook):
+{
+  "asset": "JUP",
+  "markPriceUsd": 0.33001,
+  "bids": [{ "priceUsd": 0.33055, "size": 45.3 }], // size in JUP
+  "asks": [{ "priceUsd": 0.33061, "size": 45.3 }]
+}
+
+// Example JSON response (positions):
+{
+  "positions": [
+    {
+      "asset": "JUP",
+      "side": "long",
+      "size": 2665, // in JUP
+      "sizeUsd": 879.45,
+      "entryPriceUsd": 0.33025,
+      "markPriceUsd": 0.33,
+      "collateralUsd": 448.53,
+      "liquidationPriceUsd": 0.17192,
+      "pnlUsd": -0.67,
+      "pnlPct": -0.08,
+      "fundingAccruedUsd": -0.06
+    }
+  ],
+  "orders": [
+    {
+      "orderId": "597858975428926611488856", // use with close --order
+      "clientOrderId": "5637932369964233",
+      "asset": "JUP",
+      "side": "long",
+      "priceUsd": 0.3241,
+      "size": 185.1,
+      "remainingSize": 185.1,
+      "reduceOnly": false,
+      "collateralUsd": 20
+    }
+  ],
+  "accounts": [
+    {
+      "asset": "JUP", // each market has its own USDC account
+      "freeBalanceUsd": 359.85, // withdrawable headroom
+      "accountValueUsd": 447.8,
+      "leverage": 1.96
+    }
+  ]
+}
+
+// Example JSON response (history --type orders; trades and funding return "trades" / "funding" arrays):
+{
+  "orders": [
+    {
+      "time": "2026-10-01T07:55:47.000Z",
+      "orderId": "5978...8856",
+      "asset": "JUP",
+      "side": "long",
+      "type": "limit", // limit, market, postOnly, liquidation, adl
+      "reduceOnly": false,
+      "priceUsd": 0.3241,
+      "size": 185.1,
+      "filledSize": 0,
+      "pnlUsd": null,
+      "status": "open",
+      "signature": "yxTV...TFK" // Solana tx that opened the intent
+    }
+  ]
+}
+
+// Example JSON response (open / close):
+{
+  "action": "market-order", // limit-order, close-position, decrease-position
+  "asset": "JUP",
+  "side": "long",
+  "size": 90.8, // in JUP
+  "sizeUsd": 29.97,
+  "collateralUsd": 10, // open only
+  "leverage": 3, // open only
+  "priceUsd": 0.33341, // limit price, or worst fill price for market orders
+  "clientOrderId": "4211830984521",
+  "orderId": "6011...2231", // null until seen in order history
+  "status": "filled", // open, filled, cancelled, or "submitted" if not yet seen
+  "filledSize": 90.8,
+  "signature": "3dV9...8zG1"
+}
+
+// Example JSON response (cancel):
+{ "action": "cancel-order", "orderId": "5978...8856", "asset": "JUP", "signature": "4wYb...drLf" }
+
+// Example JSON response (set):
+{ "action": "add-collateral", "asset": "JUP", "amountUsd": 20, "signature": "5YhT...9AKU" } // or remove-collateral
 ```
 
 ## Workflows
