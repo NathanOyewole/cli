@@ -9,10 +9,50 @@ const ETHENA_EARN_HOLDER = "C23FGxQB2LsoTbZsQr5w3R7b3sw5saxPLGJ4ujvyH34L"; // jl
 const BORROWER = "8RBYhetLKzr9ju9H2wDJ9W77dbCZXCPTKTK6KGfMv86n"; // vault 1 (SOL/USDC) position 10062
 const JUPSOL_HOLDER = "3rfeoFgH8qYW1jRMjbLn1jCrotEBxeeYZ44Fqap5W3xj"; // margin for vault 4 (JupSOL/SOL)
 const SOL_DEBT_BORROWER = "4opUjMGDNp15NF5UiEcuSSuuWYMyLy4bkJXrTWhPQRtb"; // vault 5 (JitoSOL/SOL) position 719, holds enough SOL to repay
+// Smart vaults: 90 = syrupUSDC-USDC / USDC (smart collateral, Multiply),
+// 91 = PST / JupUSD-USDC (smart debt), 98 = USX-USDC / USDC (Smart Earn).
+const SMART_COL_BORROWER = "2hn53MTjDQ8xWuyKQect6omUnH9W2kQX2gNQwqYrn6jP"; // vault 90 position 39, ~65 USDC
+const SMART_COL_SUPPLIER = "DWHe9gz3fQgWuDUSVXrakDHd9U5vBEuRCFpcDSzSDXgG"; // vault 90 position 34, no debt
+const SMART_PAIR_HOLDER = "45YnzauhsBM8CpUz96Djf8UG5vqq2Dua62wuW9H3jaJ5"; // syrupUSDC and USDC
+const SMART_DEBT_BORROWER = "HKnDA68eAWHQhGhzzEyjPRnHWFM84vtWxpPuz5GfQGa2"; // vault 91 position 29
+const SMART_DEBT_REPAYER = "CDokizX2zfqeoKEfTRUmyH8ZkcCjY2EyakWB7eGAvE6P"; // vault 91 position 13, ~9000 USDC
+const SMART_DEBT_CLOSER = "6iza5UakLsjWxyM8tvGMGx5dqvAKdsJsYsmnKGys4oL8"; // vault 91 position 38, JupUSD and USDC
+const SMART_EARN_SUPPLIER = "C4f3Ld3fEmNs5ELKjbHf3yswi6nc2JoeRwXzJryr5CGG"; // vault 98 position 10
 
 const nonEmpty = (key: string) => (json: unknown) =>
   Array.isArray((json as Record<string, unknown>)[key]) &&
   ((json as Record<string, unknown[]>)[key]?.length ?? 0) > 0;
+
+function smartArgs(
+  command: string,
+  position: string,
+  vault: string,
+  rest: string[]
+): string[] {
+  return [
+    "lend",
+    "borrow",
+    command,
+    "--position",
+    position,
+    "--vault",
+    vault,
+    ...rest,
+  ];
+}
+
+function smartMultiplyArgs([command, ...rest]: string[]): string[] {
+  return [
+    "lend",
+    "multiply",
+    command!,
+    "--position",
+    "39",
+    "--vault",
+    "90",
+    ...rest,
+  ];
+}
 
 export const cases: ParityCase[] = [
   {
@@ -396,11 +436,176 @@ export const cases: ParityCase[] = [
     wallet: BORROWER,
   },
   {
-    id: "smart-vault-operate",
+    id: "smart-open-one-sided",
     feature: "lend-multiply-smart",
-    kind: "unsupported",
-    reason:
-      "smart (DEX) vault deposit/borrow/repay/withdraw, Smart Earn and Smart Multiply: lite-api lend/v1/borrow/operate rejects DEX vaults ('use getOperateDexIx from @jup-ag/lend/smart-vaults'); that SDK path needs @coral-xyz/anchor + @solana/web3.js (well over the 500 KB budget) plus its DEX share/slippage math",
+    kind: "tx",
+    args: [
+      "lend",
+      "borrow",
+      "open",
+      "--vault",
+      "90",
+      "--collateral1",
+      "100",
+      "--borrow",
+      "50",
+    ],
+    wallet: SMART_DEBT_REPAYER,
+  },
+  {
+    id: "smart-open-both-tokens",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: [
+      "lend",
+      "borrow",
+      "open",
+      "--vault",
+      "90",
+      "--collateral",
+      "100",
+      "--collateral1",
+      "100",
+      "--borrow",
+      "50",
+    ],
+    wallet: SMART_PAIR_HOLDER,
+  },
+  {
+    id: "smart-deposit",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: smartArgs("deposit", "39", "90", ["--amount1", "10"]),
+    wallet: SMART_COL_BORROWER,
+  },
+  {
+    id: "smart-borrow",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: smartArgs("borrow", "39", "90", ["--amount", "5"]),
+    wallet: SMART_COL_BORROWER,
+  },
+  {
+    id: "smart-repay",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: smartArgs("repay", "39", "90", ["--amount", "1"]),
+    wallet: SMART_COL_BORROWER,
+  },
+  {
+    id: "smart-withdraw",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: smartArgs("withdraw", "39", "90", ["--amount1", "5"]),
+    wallet: SMART_COL_BORROWER,
+  },
+  {
+    id: "smart-withdraw-all",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: smartArgs("withdraw", "34", "90", []),
+    wallet: SMART_COL_SUPPLIER,
+  },
+  {
+    id: "smart-withdraw-all-one-token",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: smartArgs("withdraw", "34", "90", ["--amount1", "max"]),
+    wallet: SMART_COL_SUPPLIER,
+  },
+  {
+    id: "smart-debt-borrow",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: smartArgs("borrow", "29", "91", ["--amount", "5", "--amount1", "5"]),
+    wallet: SMART_DEBT_BORROWER,
+  },
+  {
+    id: "smart-debt-repay",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: smartArgs("repay", "13", "91", ["--amount1", "10"]),
+    wallet: SMART_DEBT_REPAYER,
+  },
+  {
+    id: "smart-debt-repay-all-one-token",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: smartArgs("repay", "13", "91", ["--amount1", "max"]),
+    wallet: SMART_DEBT_REPAYER,
+  },
+  {
+    id: "smart-operate",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: smartArgs("operate", "38", "91", [
+      "--repay",
+      "5",
+      "--repay1",
+      "5",
+      "--withdraw",
+      "1",
+    ]),
+    wallet: SMART_DEBT_CLOSER,
+  },
+  {
+    id: "smart-close",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: smartArgs("close", "38", "91", []),
+    wallet: SMART_DEBT_CLOSER,
+  },
+  {
+    id: "smart-earn-deposit",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: ["lend", "borrow", "open", "--vault", "98", "--collateral1", "10"],
+    wallet: SMART_DEBT_REPAYER,
+  },
+  {
+    id: "smart-earn-withdraw",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: smartArgs("withdraw", "10", "98", ["--amount1", "1"]),
+    wallet: SMART_EARN_SUPPLIER,
+  },
+  {
+    id: "smart-multiply-open",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: [
+      "lend",
+      "multiply",
+      "open",
+      "--vault",
+      "90",
+      "--amount",
+      "100",
+      "--leverage",
+      "3",
+    ],
+    wallet: SMART_DEBT_REPAYER,
+  },
+  {
+    id: "smart-multiply-leverage-up",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: smartMultiplyArgs(["set", "--leverage", "3"]),
+    wallet: SMART_COL_BORROWER,
+  },
+  {
+    id: "smart-multiply-deleverage",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: smartMultiplyArgs(["set", "--leverage", "2"]),
+    wallet: SMART_COL_BORROWER,
+  },
+  {
+    id: "smart-multiply-close",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: smartMultiplyArgs(["close"]),
+    wallet: SMART_COL_BORROWER,
   },
   // Earn Vaults (jup.ag/earn), rechecked 2026-10-01: jup.ag/earn and the web's
   // API base vaults.jup.ag/v1/* return 404. vaults.jup.ag now serves a separate
