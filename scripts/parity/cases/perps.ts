@@ -600,4 +600,42 @@ export const cases: ParityCase[] = [
     args: ["perps", "loans", "repay", "--withdraw", "0.1"],
     resolve: withLoan((p) => BigInt(p.maxWithdrawTokenAmount) > 200_000n),
   },
+  {
+    id: "leaderboard",
+    feature: "perps-rankings",
+    kind: "read",
+    args: ["perps", "leaderboard", "--asset", "SOL"],
+    expect: hasItems("traders"),
+  },
+  {
+    id: "leaderboard-past-week-pnl",
+    feature: "perps-rankings",
+    kind: "read",
+    args: [
+      "perps",
+      "leaderboard",
+      "--asset",
+      "BTC",
+      "--week",
+      "30",
+      "--sort",
+      "pnl",
+      "--limit",
+      "5",
+    ],
+    expect: hasItems("traders"),
+  },
+  {
+    id: "trader-stats",
+    feature: "perps-rankings",
+    kind: "read",
+    args: ["perps", "stats", "--address", WALLET, "--asset", "SOL"],
+    resolve: async () => {
+      const board = await get<{ topTradersByVolume: { owner: string }[] }>(
+        `top-traders?marketMint=${MINT_BY_ASSET.SOL}&year=${new Date().getUTCFullYear()}&week=current`
+      );
+      return { WALLET: board.topTradersByVolume[0]!.owner };
+    },
+    expect: (json) => ((json as { volumeUsd?: number }).volumeUsd ?? 0) > 0,
+  },
 ];

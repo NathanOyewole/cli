@@ -477,6 +477,54 @@ jup perps loans repay --amount max --withdraw max
 }
 ```
 
+### Leaderboard and trader stats
+
+Weekly rankings for the SOL, ETH, and BTC markets (weeks run Monday to Sunday UTC).
+
+```bash
+# Top traders this week, ranked by volume (the web's default)
+jup perps leaderboard --asset BTC
+
+# A past week, ranked by PnL
+jup perps leaderboard --asset SOL --year 2026 --week 30 --sort pnl --limit 10
+
+# A wallet's PnL and volume for a market and week
+jup perps stats --address <wallet-address> --asset ETH --week current
+```
+
+```js
+// Example JSON response (leaderboard):
+{
+  "asset": "SOL",
+  "year": 2026,
+  "week": "current", // or the week number passed
+  "startTime": "2026-09-28T00:00:00.000Z",
+  "endTime": "2026-10-04T23:59:59.000Z",
+  "marketVolumeUsd": 439813116.76, // whole market's volume for the week
+  "sort": "volume",
+  "traders": [
+    {
+      "rank": 1,
+      "address": "97u8...uEy3",
+      "pnlUsd": -24328.53,
+      "volumeUsd": 24941102.11
+    }
+  ]
+}
+
+// Example JSON response (stats):
+{
+  "address": "AMLz...getj",
+  "asset": "SOL",
+  "year": 2026,
+  "week": "current",
+  "startTime": "2026-09-28T00:00:00.000Z",
+  "endTime": "2026-10-04T23:59:59.000Z",
+  "pnlUsd": 48326.33,
+  "volumeUsd": 518839.94
+}
+```
+
 ## Workflows
 
 ### Open a position with TP/SL

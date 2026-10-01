@@ -37,6 +37,7 @@ bun run ci
 - `PerpsCommand` — `perps positions/markets/open/set/close/history`; registers the perps subgroups below. `PerpsCollateral` implements `perps set --add-collateral/--remove-collateral`
 - `PerpsJlpCommand` — `perps jlp info/mint/burn`
 - `PerpsLoansCommand` — `perps loans info/positions/history/borrow/repay`
+- `PerpsLeaderboardCommand` — `perps leaderboard/stats`
 - `PortfolioCommand` — `portfolio positions/pnl/airdrops`, `portfolio addressbook list/add/remove`
 - `PredictionsCommand` — `predictions events/positions/open/close/history`; registers the predictions subcommand files below
 - `PredictionsAccountCommand` — `predictions orders/claim/leaderboard/profile/pnl/set-username`
