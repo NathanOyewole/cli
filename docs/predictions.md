@@ -317,6 +317,7 @@ jup predictions close --position <pubkey> --dry-run
 - `--contracts` rounds down to the venue's step (1 contract on Kalshi, 0.01 on Polymarket)
 - Saba (`gx`) positions can't be sold, fully or partly; hold them until the market resolves, then claim
 - Sells wait for the fill and report `orderStatus`, like `open`; a `failed` sell exits non-zero
+- `--position all` asks the server for a sell (or claim) per position, with a 5% price floor like jup.ag's Close All, and runs them in order. Table mode prints each one as it lands; sells are then checked for fills. If one fails, the rest are skipped: the response lists the completed `results`, the `failed` item and an `error`, and the command exits non-zero
 - `--dry-run` previews without signing. JSON response includes the unsigned base64 `transaction`
 
 ```js
@@ -360,11 +361,18 @@ jup predictions close --position <pubkey> --dry-run
   "action": "close-all",
   "results": [
     {
-      "action": "close", // or "claim"
+      "action": "close", // or "claim" (claims have no order or fill fields)
       "positionPubkey": "3qMZ...83tz",
+      "orderPubkey": "2pf8...N33a",
+      "orderStatus": "filled", // null in dry-run
+      "filledContracts": 10,
+      "avgFillPriceUsd": 0.72,
       "signature": "5YhT...9AKU"
     }
-  ]
+  ],
+  // only when an item failed (exit code 1):
+  "failed": { "action": "close", "positionPubkey": "9hQh...PpVi", "error": "..." },
+  "error": "close 9hQh...PpVi failed: ... (1 of 2 completed before it)."
 }
 
 // Example JSON response (cancel):
@@ -382,6 +390,8 @@ jup predictions claim                       # every claimable position
 jup predictions claim --position <pubkey>   # one position
 jup predictions claim --dry-run
 ```
+
+- Claims run one by one; table mode prints each as it lands. If one fails, the rest are skipped: the response lists the completed `results` plus `failed` and `error`, and the command exits non-zero
 
 ```js
 // Example JSON response:

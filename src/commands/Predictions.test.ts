@@ -118,6 +118,40 @@ describe("dry run", () => {
   });
 });
 
+describe("batches", () => {
+  test("stop at the first failure and keep what landed", async () => {
+    const result = await PredictionsExecution.runInOrder(
+      ["a", "b", "c"],
+      async (item) => {
+        if (item === "b") {
+          throw new Error("tx expired");
+        }
+        return item.toUpperCase();
+      }
+    );
+    expect(result).toEqual({
+      done: ["A"],
+      failed: { item: "b", error: "tx expired" },
+    });
+  });
+
+  test("run every item when nothing fails", async () => {
+    expect(
+      await PredictionsExecution.runInOrder([1, 2], async (n, i) => n + i)
+    ).toEqual({ done: [1, 3], failed: null });
+  });
+
+  test("the error names the failing item and the progress", () => {
+    expect(
+      PredictionsExecution.batchError(
+        { label: "close Pos2", error: "tx expired" },
+        1,
+        3
+      )
+    ).toBe("close Pos2 failed: tx expired (1 of 3 completed before it).");
+  });
+});
+
 describe("fill errors", () => {
   const fill = { filledContracts: 0, avgFillPriceUsd: null };
 

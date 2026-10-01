@@ -3,7 +3,6 @@ import type { Command } from "commander";
 
 import {
   PredictionsClient,
-  type ClaimPositionResponse,
   type CreateOrderResponse,
   type PredictionEvent,
   type PredictionPosition,
@@ -434,7 +433,7 @@ export class PredictionsCommand {
         signature: result.signature,
         ...(Config.dryRun && { transaction: res.transaction }),
       });
-      this.failOn(error);
+      PredictionsFormat.failOn(error);
       return;
     }
 
@@ -477,18 +476,7 @@ export class PredictionsCommand {
           : []),
       ],
     });
-    this.failOn(error);
-  }
-
-  /** The JSON or table already carries the details; only the exit code and table-mode line remain. */
-  private static failOn(error: string | null): void {
-    if (!error) {
-      return;
-    }
-    if (!Output.isJson()) {
-      console.log(`${chalk.red.bold("Error:")} ${error}`);
-    }
-    process.exitCode = 1;
+    PredictionsFormat.failOn(error);
   }
 
   private static priceLimitRows(
@@ -824,61 +812,121 @@ export class PredictionsCommand {
     });
   }
 
+  /**
+   * Sells and claims every position one by one. Each item lands on its own, so
+   * a failure part-way reports what already went through, then exits non-zero.
+   */
   private static async closeAll(signer: Signer): Promise<void> {
     const res = await PredictionsClient.closeAllPositions(signer.address);
-
     if (res.data.length === 0) {
       throw new Error("No open positions to close.");
     }
+    if (Config.dryRun && !Output.isJson()) {
+      console.log(Output.DRY_RUN_LABEL);
+    }
 
-    const results: {
-      action: string;
-      positionPubkey: string;
-      signature: string | null;
-      transaction?: string | null;
-    }[] = [];
+    const total = res.data.length;
+    const { done, failed } = await PredictionsExecution.runInOrder(
+      res.data,
+      async (item, index) => {
+        const isClaim = "position" in item;
+        const { signature } = await PredictionsExecution.signAndExecute(
+          signer,
+          item,
+          isClaim ? {} : { ownerPubkey: item.order.userPubkey }
+        );
+        const positionPubkey = isClaim
+          ? item.position.positionPubkey
+          : item.order.positionPubkey;
+        PredictionsFormat.printProgress(
+          index,
+          total,
+          `${isClaim ? "claim" : "close"} ${positionPubkey}`,
+          signature
+        );
+        return { item, positionPubkey, signature };
+      }
+    );
 
-    for (const item of res.data) {
-      const isClaim = "position" in item;
-      const execResult = await PredictionsExecution.signAndExecute(
-        signer,
-        item,
-        isClaim
-          ? {}
-          : { ownerPubkey: (item as CreateOrderResponse).order.userPubkey }
+    const results = [];
+    let fillError: string | null = null;
+    for (const { item, positionPubkey, signature } of done) {
+      if ("position" in item) {
+        results.push({
+          action: "claim",
+          positionPubkey,
+          signature,
+          ...(Config.dryRun && { transaction: item.transaction }),
+        });
+        continue;
+      }
+      const fill = await this.trackFill(item, signer.address, {
+        isLimit: false,
+      });
+      fillError ??= PredictionsExecution.fillError(
+        fill,
+        item.order.orderPubkey,
+        signature
       );
-      const pubkey = isClaim
-        ? (item as ClaimPositionResponse).position.positionPubkey
-        : (item as CreateOrderResponse).order.positionPubkey;
       results.push({
-        action: isClaim ? "claim" : "close",
-        positionPubkey: pubkey,
-        signature: execResult.signature,
+        action: "close",
+        positionPubkey,
+        orderPubkey: item.order.orderPubkey,
+        ...fill,
+        signature,
         ...(Config.dryRun && { transaction: item.transaction }),
       });
     }
 
+    const failedItem = failed && {
+      action: "position" in failed.item ? "claim" : "close",
+      positionPubkey:
+        "position" in failed.item
+          ? failed.item.position.positionPubkey
+          : failed.item.order.positionPubkey,
+      error: failed.error,
+    };
+    const error = failedItem
+      ? PredictionsExecution.batchError(
+          {
+            label: `${failedItem.action} ${failedItem.positionPubkey}`,
+            error: failedItem.error,
+          },
+          done.length,
+          total
+        )
+      : fillError;
+
     if (Output.isJson()) {
       Output.json({
+        ...(error && { error }),
         ...(Config.dryRun && { dryRun: true }),
         action: "close-all",
         results,
+        ...(failedItem && { failed: failedItem }),
       });
+      PredictionsFormat.failOn(error);
       return;
     }
 
-    if (Config.dryRun) {
-      console.log(Output.DRY_RUN_LABEL);
+    if (results.length > 0) {
+      Output.table({
+        type: "horizontal",
+        headers: {
+          action: "Action",
+          positionPubkey: "Position",
+          ...(!Config.dryRun && {
+            orderStatus: "Order Status",
+            signature: "Tx Signature",
+          }),
+        },
+        rows: results.map((r) => ({
+          ...r,
+          orderStatus: "orderStatus" in r ? (r.orderStatus ?? "") : "",
+        })),
+      });
     }
-    Output.table({
-      type: "horizontal",
-      headers: {
-        action: "Action",
-        positionPubkey: "Position",
-        ...(!Config.dryRun && { signature: "Tx Signature" }),
-      },
-      rows: results,
-    });
+    PredictionsFormat.failOn(error);
   }
 
   private static async claim(
@@ -1038,7 +1086,7 @@ export class PredictionsCommand {
         signature: result.signature,
         ...(Config.dryRun && { transaction: res.transaction }),
       });
-      this.failOn(error);
+      PredictionsFormat.failOn(error);
       return;
     }
 
@@ -1070,7 +1118,7 @@ export class PredictionsCommand {
           : []),
       ],
     });
-    this.failOn(error);
+    PredictionsFormat.failOn(error);
   }
 
   /** What a sell is worth at the current bid, in micro-USD (the web's close amount). */

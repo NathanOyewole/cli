@@ -163,6 +163,40 @@ export class PredictionsExecution {
     return last;
   }
 
+  /**
+   * Runs items in order and stops at the first failure, so a batch can report
+   * what already landed on-chain alongside the item that broke.
+   */
+  public static async runInOrder<T, R>(
+    items: T[],
+    run: (item: T, index: number) => Promise<R>
+  ): Promise<{ done: R[]; failed: { item: T; error: string } | null }> {
+    const done: R[] = [];
+    for (const [index, item] of items.entries()) {
+      try {
+        done.push(await run(item, index));
+      } catch (err) {
+        return {
+          done,
+          failed: {
+            item,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        };
+      }
+    }
+    return { done, failed: null };
+  }
+
+  /** One line for a batch that stopped part-way: what broke and how far it got. */
+  public static batchError(
+    failed: { label: string; error: string },
+    completed: number,
+    total: number
+  ): string {
+    return `${failed.label} failed: ${failed.error} (${completed} of ${total} completed before it).`;
+  }
+
   private static async checkFill(order: TrackedOrder): Promise<OrderFill> {
     const orders = await PredictionsClient.getOrders({
       ownerPubkey: order.ownerPubkey,

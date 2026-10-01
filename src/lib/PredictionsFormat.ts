@@ -99,6 +99,32 @@ export class PredictionsFormat {
     return micro ? NumberConverter.fromMicroUsd(micro) : Number(whole);
   }
 
+  /** The JSON or table already carries the details; only the exit code and table-mode line remain. */
+  public static failOn(error: string | null): void {
+    if (!error) {
+      return;
+    }
+    if (!Output.isJson()) {
+      console.log(`${chalk.red.bold("Error:")} ${error}`);
+    }
+    process.exitCode = 1;
+  }
+
+  /** Table mode prints each batch item as it lands, so a long batch shows progress. */
+  public static printProgress(
+    index: number,
+    total: number,
+    label: string,
+    signature: string | null
+  ): void {
+    if (Output.isJson() || Config.dryRun) {
+      return;
+    }
+    console.log(
+      `${chalk.gray(`[${index + 1}/${total}]`)} ${label} ${signature ?? ""}`
+    );
+  }
+
   public static formatPricePct(price: number | null): string {
     if (price === null || price === undefined) {
       return chalk.gray("—");
