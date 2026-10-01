@@ -12,7 +12,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { FEATURES } from "./features.ts";
-import { WALLET, type ParityCase } from "./types.ts";
+import { type ParityCase } from "./types.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..");
@@ -162,6 +162,12 @@ async function simulate(tx: string): Promise<string | null> {
     if (err === null) {
       return null;
     }
+    // Instant (keeper co-signed) perps txs stamp a request time a few seconds
+    // ahead of the cluster clock; the keeper lands them once the clock catches up.
+    if (logs?.some((l) => l.includes("InvalidRequestTime")) && attempt < 3) {
+      await Bun.sleep(4000);
+      continue;
+    }
     const tail = (logs ?? []).filter((l) => /error|failed/i.test(l)).at(-1);
     return `${JSON.stringify(err)} ${tail ?? ""}`.trim();
   }
@@ -184,9 +190,18 @@ async function check(c: ParityCase): Promise<[Verdict, string]> {
   if (c.kind === "unsupported") {
     return ["UNSUPPORTED", c.reason];
   }
-  const wallet = c.wallet ?? DEFAULT_WALLET;
+  let vars: Record<string, string> = {};
+  try {
+    vars = c.resolve ? await c.resolve() : {};
+  } catch (err) {
+    return ["FAIL", `resolve: ${err instanceof Error ? err.message : err}`];
+  }
+  const wallet = vars.WALLET ?? c.wallet ?? DEFAULT_WALLET;
   const home = homeFor(c.key === "generated" ? GENERATED : wallet);
-  const args = c.args.map((a) => a.replaceAll(WALLET, wallet));
+  const substitutions = Object.entries({ ...vars, WALLET: wallet });
+  const args = c.args.map((a) =>
+    substitutions.reduce((s, [k, v]) => s.replaceAll(`$${k}`, v), a)
+  );
   const flags = c.kind === "tx" ? ["-f", "json", "--dry-run"] : ["-f", "json"];
   let run = runCli(home, [...flags, ...args]);
   for (
