@@ -19,6 +19,7 @@ import { NumberConverter } from "../lib/NumberConverter.ts";
 import { Output } from "../lib/Output.ts";
 import { Signer } from "../lib/Signer.ts";
 import { Swap } from "../lib/Swap.ts";
+import { SpotDcaCommand } from "./SpotDcaCommand.ts";
 import { SpotLimitCommand } from "./SpotLimitCommand.ts";
 
 export class SpotCommand {
@@ -104,6 +105,7 @@ export class SpotCommand {
       .option("--token <token>", "Token symbol or mint address to reclaim")
       .action((opts) => this.reclaim(opts));
     SpotLimitCommand.register(spot);
+    SpotDcaCommand.register(spot);
   }
 
   private static async tokens(opts: {
