@@ -184,6 +184,185 @@ jup lend earn chart --token USDC --range 30d
 }
 ```
 
+## Borrow
+
+Vaults pair one collateral token with one debt token. A position is an NFT identified by `positionId` (unique within its vault). Position commands look the vault up from the signer's positions; pass `--vault` when the position belongs to another wallet or the ID exists in several vaults.
+
+### Vaults
+
+```bash
+jup lend borrow vaults
+jup lend borrow vaults --multiply   # only vaults that support Multiply
+jup lend borrow vaults --smart      # only smart (DEX) vaults
+jup lend borrow vault --vault 1     # one vault with oracle price, limits and fees
+```
+
+```js
+// Example JSON response (vaults):
+{
+  "vaults": [
+    {
+      "vaultId": 1,
+      "collateral": { "id": "So11...1112", "symbol": "WSOL", "decimals": 9 },
+      "debt": { "id": "EPjF...USDC", "symbol": "USDC", "decimals": 6 },
+      "type": "normal", // or "smart" (DEX vault, read-only in the CLI)
+      "supplyApyPct": 4.05, // includes LST staking yield and rewards
+      "borrowApyPct": 5.36,
+      "maxLtvPct": 80, // max LTV when borrowing
+      "liquidationLtvPct": 85,
+      "liquidationPenaltyPct": 1,
+      "maxMultiplier": 4.85, // max Multiply leverage
+      "multiply": true,
+      "totalSupplyUsd": 208260731.91, // null for smart sides
+      "totalBorrowUsd": 64393702.06,
+      "borrowableUsd": 16098409.03,
+      "positions": 10065
+    }
+  ]
+}
+```
+
+`vault` adds `address`, `oraclePrice` (debt tokens per collateral token), `borrowFeePct`, `minimumBorrow`, `pegged` and `strategy`.
+
+### Positions
+
+```bash
+jup lend borrow positions
+jup lend borrow positions --address <wallet-address>
+jup lend borrow positions --vault 1 --position 10062
+```
+
+```js
+// Example JSON response:
+{
+  "positions": [
+    {
+      "positionId": 10062,
+      "vaultId": 1,
+      "positionAddress": "CSrW...BLjD", // position NFT mint
+      "collateral": {
+        "token": { "id": "So11...1112", "symbol": "WSOL", "decimals": 9 },
+        "amount": 214.004, // smart sides are in 9-decimal DEX shares
+        "amountUsd": 25254.93 // null for smart sides
+      },
+      "debt": {
+        "token": { "id": "EPjF...USDC", "symbol": "USDC", "decimals": 6 },
+        "amount": 7146.967,
+        "amountUsd": 7145.71
+      },
+      "netValueUsd": 18109.22,
+      "ltvPct": 28.31, // current LTV
+      "maxLtvPct": 80,
+      "liquidationLtvPct": 85, // liquidated at this LTV
+      "liquidationPrice": 39.29, // collateral price (in debt tokens) at which it liquidates; null without debt
+      "healthStatus": "Safe", // Safe, Medium, Risky, Very Risky or Liquidated
+      "multiplier": 1.39, // effective leverage
+      "supplyApyPct": 4.05,
+      "borrowApyPct": 5.36,
+      "netApyPct": 3.53, // APY on net value
+      "pnlUsd": 112.04, // null if unavailable
+      "pnlPct": 0.62,
+      "strategy": false // opened as a max-leverage strategy
+    }
+  ]
+}
+```
+
+### History and liquidations
+
+```bash
+jup lend borrow history --position 10062
+jup lend borrow history --position 10062 --vault 1 --page 2
+jup lend borrow liquidations --position 10062 --vault 1
+```
+
+- `history` returns `{ vaultId, positionId, count, history: [{ time, type, collateralChange, collateralChangeUsd, debtChange, debtChangeUsd, status, signature }], next }`; `type` is `deposit`, `borrow`, `withdraw`, `payback`, `deposit-borrow`, `payback-withdraw`, `multiply`, `unwind` or `unwind-withdraw`
+- `liquidations` returns `{ vaultId, positionId, count, liquidations: [{ time, collateralAmount, debtAmount, oraclePrice, signature }], next }`
+
+### Open, deposit, borrow, repay, withdraw, close
+
+```bash
+jup lend borrow open --vault 1 --collateral 2 --borrow 100
+jup lend borrow deposit --position 10062 --amount 1
+jup lend borrow borrow --position 10062 --amount 50
+jup lend borrow repay --position 10062 --amount 50
+jup lend borrow repay --position 10062            # repay all debt
+jup lend borrow withdraw --position 10062 --amount 1
+jup lend borrow withdraw --position 10062         # withdraw all collateral
+jup lend borrow operate --position 10062 --deposit 1 --borrow 50
+jup lend borrow operate --position 10062 --repay max --withdraw 0.5
+jup lend borrow close --position 10062            # repay all and withdraw all
+```
+
+- Amounts are in human-readable units of the collateral or debt token. Native SOL is wrapped and unwrapped automatically.
+- `operate` combines one collateral change (`--deposit` or `--withdraw`) with one debt change (`--borrow` or `--repay`) in a single transaction; `--withdraw` and `--repay` accept `max`
+- Full repay budgets an hour of interest; any excess stays in your wallet
+- Rejected before building when the resulting LTV exceeds the vault's max LTV, the borrow is below the vault minimum, or the vault lacks borrowable/withdrawable liquidity
+- Smart (DEX) vaults are read-only in the CLI
+
+```js
+// Example JSON response (with --dry-run):
+{
+  "dryRun": true,
+  "action": "open", // open, deposit, borrow, repay, withdraw, operate or close
+  "vaultId": 1,
+  "positionId": 10065, // the new position for `open`
+  "collateral": {
+    "token": { "id": "So11...1112", "symbol": "WSOL", "decimals": 9 },
+    "change": 0.1, // signed change
+    "amount": 0.1 // collateral after the transaction
+  },
+  "debt": {
+    "token": { "id": "EPjF...USDC", "symbol": "USDC", "decimals": 6 },
+    "change": 5,
+    "amount": 5
+  },
+  "ltvPct": 42.39, // LTV after the transaction
+  "maxLtvPct": 80,
+  "liquidationLtvPct": 85,
+  "liquidationPrice": 58.82,
+  "healthStatus": "Safe", // null when no debt remains
+  "signature": null, // tx signature when not a dry run
+  "transaction": "AQAA..." // unsigned base64 transaction (dry run only)
+}
+```
+
+## Multiply
+
+Multiply builds leverage in one transaction: flashloan the debt token, swap it into collateral (Jupiter swap API), deposit and borrow, then repay the flashloan. Deleveraging runs the reverse.
+
+```bash
+jup lend multiply vaults
+jup lend multiply open --vault 4 --amount 1 --leverage 3
+jup lend multiply set --position 10062 --leverage 2    # lever up or down
+jup lend multiply close --position 10062               # sell collateral to repay all debt
+jup lend multiply open --vault 4 --amount 1 --leverage 3 --slippage 20
+```
+
+- `--amount` is the margin, in the collateral token; `--leverage` is between 1 and the vault's `maxMultiplier`
+- `--slippage` is in basis points (default 10)
+- If a vault's swap route is too large to open and lever in one transaction, `open` asks you to `jup lend borrow open` first and then `multiply set`
+- Smart Multiply (smart vaults) is not supported
+- The response has the same shape as the borrow commands plus `leverage` (after) and `swap: { inputMint, outputMint, inAmount, minOutAmount, route, slippageBps }`
+
+## Markets, statistics and tools
+
+```bash
+jup lend markets                                      # main and Ethena markets with TVL
+jup lend stats earn [--market ethena]                 # total supply, lifetime earnings, per-token supply
+jup lend stats borrow                                 # total collateral and debt, top vaults
+jup lend stats liquidity                              # liquidity layer supply/borrow, APYs, utilization
+jup lend stats dex                                    # smart vault DEX pools: 7d volume, fees, swaps
+jup lend stats positions --vault 1 --sort borrow      # all borrow positions; also --address, --liquidated, --page
+jup lend strategies                                   # max-leverage strategy vaults with max APY
+jup lend calculator --vault 4 --leverage 5            # days to liquidation (pegged vaults)
+jup lend transparency [--market ethena]               # multisigs, audits, oracles, risk reports
+```
+
+- `calculator` returns `{ vaultId, leverage, maxMultiplier, ltvPct, liquidationLtvPct, supplyApyPct, netApyPct, scenarios: [{ scenario, borrowApyPct, daysToLiquidation }] }`; scenarios `standard`, `moderate` and `max` use 1x, 2x and 3x the current borrow APY, and `daysToLiquidation` is `null` when supply yield outpaces borrow cost
+- `stats positions` sorts by `healthFactor`, `ratio`, `updatedAt` (default), `supply` or `borrow`
+- Refinance (migrating Kamino/Marginfi/Save positions) is not available: it needs an internal Jupiter API
+
 ## Workflows
 
 ### Check available tokens then deposit

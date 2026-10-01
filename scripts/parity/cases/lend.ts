@@ -400,4 +400,38 @@ export const cases: ParityCase[] = [
     reason:
       "smart (DEX) vault deposit/borrow/repay/withdraw, Smart Earn and Smart Multiply: lite-api lend/v1/borrow/operate rejects DEX vaults ('use getOperateDexIx from @jup-ag/lend/smart-vaults'); that SDK path needs @coral-xyz/anchor + @solana/web3.js (well over the 500 KB budget) plus its DEX share/slippage math",
   },
+  // Earn Vaults (jup.ag/earn), rechecked 2026-10-01: jup.ag/earn and the web's
+  // API base vaults.jup.ag/v1/* return 404. vaults.jup.ag now serves a separate
+  // curator console whose /api has no user deposit or withdraw builders.
+  ...(
+    [
+      ["earn-list", "vault list"],
+      ["earn-detail", "vault detail, performance, allocation and activity"],
+      ["earn-positions", "wallet positions and withdrawal requests"],
+      [
+        "earn-simulation",
+        "deposit, instant withdraw, queued requests and claims (server-built txs under /v1/vaults/:id/transactions)",
+      ],
+    ] as const
+  ).map(
+    ([feature, what]): ParityCase => ({
+      id: feature,
+      feature,
+      kind: "unsupported",
+      reason: `backend not live in production (vaults.jup.ag 404 on 2026-10-01): ${what}; jup.ag/earn also 404s and only staging api.raccoons.dev/vault serves this API`,
+    })
+  ),
+  {
+    id: "earn-mobile",
+    feature: "earn-mobile",
+    kind: "unsupported",
+    reason: "UI-only: mobile layout of the Earn Vaults pages",
+  },
+  {
+    id: "earn-access",
+    feature: "earn-access",
+    kind: "unsupported",
+    reason:
+      "whitelist registration (POST yield-store.raccoons.dev/v1/beta/register) needs a Cloudflare Turnstile captchaToken",
+  },
 ];

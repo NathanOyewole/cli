@@ -6,7 +6,7 @@ export type Paginated<T> = {
   data: T[];
 };
 
-export type EarnAction = {
+export type EarnHistoryEntry = {
   type: string;
   signature: string;
   from: string;
@@ -178,7 +178,7 @@ export class FluidClient {
     market: LendMarket,
     address: string,
     params: { page: number; type?: string; ftoken?: string }
-  ): Promise<Paginated<EarnAction>> {
+  ): Promise<Paginated<EarnHistoryEntry>> {
     return this.#ky
       .get(`v1/${market}/lending/users/${address}/actions`, {
         searchParams: clean(params),
@@ -303,15 +303,6 @@ export class FluidClient {
     market: LendMarket
   ): Promise<FlashloanPosition[]> {
     return this.#ky.get(`v1/${market}/flashloan/positions`).json();
-  }
-
-  public static async registerStrategyPosition(
-    market: LendMarket,
-    signature: string
-  ): Promise<void> {
-    await this.#ky.put(`v2/${market}/borrowing/nfts/configs`, {
-      json: { signature },
-    });
   }
 }
 
