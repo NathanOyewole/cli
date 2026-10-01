@@ -205,7 +205,7 @@ jup lend borrow vault --vault 1     # one vault with oracle price, limits and fe
       "vaultId": 1,
       "collateral": { "id": "So11...1112", "symbol": "WSOL", "decimals": 9 },
       "debt": { "id": "EPjF...USDC", "symbol": "USDC", "decimals": 6 },
-      "type": "normal", // or "smart" (DEX vault, read-only in the CLI)
+      "type": "normal", // or "smart" (a side is a DEX pair; see Smart vaults)
       "supplyApyPct": 4.05, // includes LST staking yield and rewards
       "borrowApyPct": 5.36,
       "maxLtvPct": 80, // max LTV when borrowing
@@ -213,6 +213,7 @@ jup lend borrow vault --vault 1     # one vault with oracle price, limits and fe
       "liquidationPenaltyPct": 1,
       "maxMultiplier": 4.85, // max Multiply leverage
       "multiply": true,
+      "earn": false, // a Smart Earn vault (smart collateral held without debt)
       "totalSupplyUsd": 208260731.91, // null for smart sides
       "totalBorrowUsd": 64393702.06,
       "borrowableUsd": 16098409.03,
@@ -298,7 +299,6 @@ jup lend borrow close --position 10062            # repay all and withdraw all
 - `operate` combines one collateral change (`--deposit` or `--withdraw`) with one debt change (`--borrow` or `--repay`) in a single transaction; `--withdraw` and `--repay` accept `max`
 - Full repay budgets an hour of interest; any excess stays in your wallet
 - Rejected before building when the resulting LTV exceeds the vault's max LTV, the borrow is below the vault minimum, or the vault lacks borrowable/withdrawable liquidity
-- Smart (DEX) vaults are read-only in the CLI
 
 ```js
 // Example JSON response (with --dry-run):
@@ -327,6 +327,61 @@ jup lend borrow close --position 10062            # repay all and withdraw all
 }
 ```
 
+### Smart vaults
+
+On a smart vault (types 2-4) a side is a DEX pair (e.g. syrupUSDC-USDC collateral, or JupUSD-USDC debt). Its position is held in 9-decimal DEX shares, and the same commands move either pair token or both:
+
+```bash
+jup lend borrow open --vault 90 --collateral1 100 --borrow 50          # one-sided USDC deposit
+jup lend borrow open --vault 90 --collateral 100 --collateral1 100     # both tokens
+jup lend borrow deposit --position 39 --amount1 25
+jup lend borrow borrow --position 29 --vault 91 --amount 5 --amount1 5 # smart debt: borrow both tokens
+jup lend borrow repay --position 13 --vault 91 --amount1 10
+jup lend borrow repay --position 13 --vault 91 --amount1 max           # repay all debt in USDC only
+jup lend borrow withdraw --position 34 --vault 90 --amount max         # withdraw everything as syrupUSDC
+jup lend borrow withdraw --position 34 --vault 90                      # withdraw everything in both tokens
+jup lend borrow operate --position 38 --vault 91 --repay 5 --repay1 5 --withdraw 1
+jup lend borrow close --position 38 --vault 91 --slippage 5
+```
+
+- `--amount`/`--collateral`/`--deposit`/`--withdraw`/`--borrow`/`--repay` move the pair's first token; the `1`-suffixed options move the second. A normal side takes only the first.
+- Amounts are exact token amounts; the share change is bounded by `--slippage` (basis points, default twice the pool fee, else 2 = 0.02%)
+- `max` on one token exits the whole side in that token; `max` on both, or no amount on `withdraw`/`repay`/`close`, exits it in both tokens. A full exit can't be combined with a partial amount on the other smart side.
+- Smart Earn is a smart-collateral vault (`earn: true`, e.g. vault 98) held without debt: `open --collateral/--collateral1`, `deposit` and `withdraw`
+- The response adds `legs` (signed per-token changes) to each smart side and `slippageBps`; a smart side's `change` and `amount` are in shares
+
+```js
+// Example JSON response (lend borrow repay --position 13 --vault 91 --amount1 10 --dry-run):
+{
+  "dryRun": true,
+  "action": "repay",
+  "vaultId": 91,
+  "positionId": 13,
+  "collateral": {
+    "token": { "id": "59ob...ZAGw", "symbol": "PST", "decimals": 6 },
+    "change": 0,
+    "amount": 4025.195045
+  },
+  "debt": {
+    "token": { "id": "Jupr...5USD,EPjF...Dt1v", "symbol": "JupUSD-USDC", "decimals": 9 },
+    "change": -4.952445674, // DEX shares
+    "amount": 19.877668483,
+    "legs": [
+      { "token": { "id": "Jupr...5USD", "symbol": "JupUSD", "decimals": 6 }, "change": 0 },
+      { "token": { "id": "EPjF...Dt1v", "symbol": "USDC", "decimals": 6 }, "change": -10 }
+    ]
+  },
+  "ltvPct": 0.88,
+  "maxLtvPct": 87,
+  "liquidationLtvPct": 90,
+  "liquidationPrice": 0.00548701,
+  "healthStatus": "Safe",
+  "slippageBps": 2,
+  "signature": null,
+  "transaction": "AQAA..."
+}
+```
+
 ## Multiply
 
 Multiply builds leverage in one transaction: flashloan the debt token, swap it into collateral (Jupiter swap API), deposit and borrow, then repay the flashloan. Deleveraging runs the reverse.
@@ -342,8 +397,21 @@ jup lend multiply open --vault 4 --amount 1 --leverage 3 --slippage 20
 - `--amount` is the margin, in the collateral token; `--leverage` is between 1 and the vault's `maxMultiplier`
 - `--slippage` is in basis points (default 10)
 - If a vault's swap route is too large to open and lever in one transaction, `open` asks you to `jup lend borrow open` first and then `multiply set`
-- Smart Multiply (smart vaults) is not supported
 - The response has the same shape as the borrow commands plus `leverage` (after) and `swap: { inputMint, outputMint, inAmount, minOutAmount, route, slippageBps }`
+
+### Smart Multiply
+
+On a smart-collateral vault whose debt token is one of the pair tokens (e.g. vault 90, syrupUSDC-USDC / USDC), Multiply needs no swap: the flashloaned debt token is deposited one-sided into the pair, and an unwind withdraws it one-sided to repay. `multiply vaults` marks these vaults `supported: true`.
+
+```bash
+jup lend multiply open --vault 90 --amount 100 --leverage 3     # margin in USDC
+jup lend multiply set --position 39 --vault 90 --leverage 2
+jup lend multiply close --position 39 --vault 90
+```
+
+- `--amount` is the margin in the debt token; `--slippage` bounds the DEX deposit or withdrawal (default twice the pool fee, else 2 bps)
+- `close` repays all debt by withdrawing that much collateral (plus interest and slippage padding) in the debt token; as on jup.ag, the rest of the collateral stays in the position. Withdraw it with `jup lend borrow withdraw`
+- The response has `swap: null`, `slippageBps`, and `collateral.legs` like the smart borrow commands
 
 ## Markets, statistics and tools
 

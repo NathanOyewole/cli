@@ -34,8 +34,8 @@ bun run ci
 - `GiftCommand` — `gift create/claim/info/clawback/pending/history`
 - `KeysCommand` — `keys list/add/delete/edit/use/solana-import`
 - `LendCommand` — `lend earn tokens/positions/deposit/withdraw/history/chart` (all lend commands take `--market main|ethena`); registers:
-  - `LendBorrowCommand` — `lend borrow vaults/vault/positions/history/liquidations/open/deposit/borrow/repay/withdraw/operate/close`
-  - `LendMultiplyCommand` — `lend multiply vaults/open/set/close`
+  - `LendBorrowCommand` — `lend borrow vaults/vault/positions/history/liquidations/open/deposit/borrow/repay/withdraw/operate/close`; smart (DEX) vaults go through `LendSmartOperate` (pair-token amounts, share slippage, one-token or proportional full exits)
+  - `LendMultiplyCommand` — `lend multiply vaults/open/set/close`; smart-collateral vaults go through `LendSmartMultiply` (swap-free flashloan loop)
   - `LendToolsCommand` — `lend markets`, `lend stats earn/borrow/liquidity/dex/positions`, `lend strategies/calculator/transparency` (static data in `LendTransparency.ts`)
 - `PerpsCommand` — `perps positions/markets/open/set/close/history`; registers the perps subgroups below. `PerpsCollateral` implements `perps set --add-collateral/--remove-collateral`
 - `PerpsJlpCommand` — `perps jlp info/mint/burn`
@@ -90,6 +90,10 @@ bun run ci
 - `LendFlashloan` — Jupiter Lend flashloan borrow/payback instructions (built from program IDs, seeds and IDL; no SDK)
 - `LendMath` — vault APYs, position health (LTV, liquidation price, status), max multiplier, APY from exchange price, days to liquidation
 - `LendOptions` — shared lend options (`--market`) and wallet resolution
+- `DexMath` — hand port of the @jup-ag/lend DEX user-operation math (deposit/withdraw/borrow/payback shares, perfect and one-token max amounts)
+- `LendTicks` — borrow-vault tick, branch and liquidation simulation used to pick the operate instruction's tick accounts
+- `LendDexOperate` — hand-built smart vault `operate_dex`/`operate_perfect_dex` instructions with their accounts and lookup tables (no SDK)
+- `LendSmart` — jup.ag smart-side helpers: API DEX snapshot to math context, share bounds, full exits, share splits, Smart Multiply flashloan sizing
 
 **API Clients** (`src/clients/`):
 
@@ -132,6 +136,10 @@ bun run ci
 **Lend earn flow:** LendClient.getTokens → LendClient.postEarnInstructions → LendTx (ATAs, SOL wrap, compile) → Signer.signTransaction → Rpc.sendAndConfirm
 
 **Lend borrow flow:** FluidClient (vault/position) → LendClient.postOperateInstructions → LendTx → Signer.signTransaction → Rpc.sendAndConfirm
+
+**Lend smart vault flow:** FluidClient (vault DEX snapshot + position) → LendSmart (share bounds) → LendDexOperate (on-chain accounts, ticks) → LendTx → Signer.signTransaction → Rpc.sendAndConfirm
+
+**Lend smart multiply flow:** LendSmart.multiplyFlashloan → LendFlashloan.borrowIx → LendDexOperate (one-sided deposit + borrow, or withdraw + payback) → LendFlashloan.paybackIx → LendTx → Rpc.sendAndConfirm
 
 **Lend multiply flow:** LendFlashloan.borrowIx → SwapV1Client swap instruction → LendClient.postOperateInstructions → LendFlashloan.paybackIx → LendTx.compile (fits check) → Rpc.sendAndConfirm
 

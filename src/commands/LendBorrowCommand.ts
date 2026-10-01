@@ -15,6 +15,7 @@ import { LendTx } from "../lib/LendTx.ts";
 import { NumberConverter } from "../lib/NumberConverter.ts";
 import { Output } from "../lib/Output.ts";
 import { Signer } from "../lib/Signer.ts";
+import { LendSmartOperate } from "./LendSmartOperate.ts";
 
 // Operate treats i128::MIN as "the whole balance" for withdraw and repay.
 export const MAX_SENTINEL = "-170141183460469231731687303715884105728";
@@ -30,10 +31,27 @@ type OperateOpts = MarketOpts & {
   vault?: string;
   position?: string;
   deposit?: string;
+  deposit1?: string;
   withdraw?: string;
+  withdraw1?: string;
   borrow?: string;
+  borrow1?: string;
   repay?: string;
+  repay1?: string;
+  slippage?: string;
 };
+
+type OperateSide = {
+  token: { symbol: string };
+  change: number;
+  amount: number;
+  legs?: { token: { symbol: string }; change: number }[];
+};
+
+const SECOND_LEG =
+  "smart vaults: amount of the pair's second token (e.g. USDC in syrupUSDC-USDC)";
+const MAX_LEG =
+  "on a smart vault 'max' settles the whole side in the first token; 'max' on both legs settles it in both";
 
 export class LendBorrowCommand {
   public static register(lend: Command): void {
@@ -90,13 +108,24 @@ export class LendBorrowCommand {
       .command("open")
       .description("Open a position: deposit collateral and optionally borrow")
       .requiredOption("--vault <id>", "Vault ID")
-      .requiredOption("--collateral <n>", "Collateral to deposit")
+      .option(
+        "--collateral <n>",
+        "Collateral to deposit (smart vaults: the pair's first token)"
+      )
+      .option("--collateral1 <n>", `Collateral to deposit (${SECOND_LEG})`)
       .option("--borrow <n>", "Amount to borrow")
+      .option("--borrow1 <n>", `Amount to borrow (${SECOND_LEG})`)
+      .option(...LendSmartOperate.slippageOption())
       .addOption(LendOptions.market())
       .option("--key <name>", "Key to use for signing")
       .action((opts) =>
         this.operate(
-          { ...opts, position: "0", deposit: opts.collateral },
+          {
+            ...opts,
+            position: "0",
+            deposit: opts.collateral,
+            deposit1: opts.collateral1,
+          },
           "open"
         )
       );
@@ -104,45 +133,78 @@ export class LendBorrowCommand {
       .command("deposit")
       .description("Add collateral to a position")
       .requiredOption("--position <id>", "Position ID")
-      .requiredOption("--amount <n>", "Collateral to deposit")
+      .option("--amount <n>", "Collateral to deposit")
+      .option("--amount1 <n>", `Collateral to deposit (${SECOND_LEG})`)
       .option("--vault <id>", "Vault ID (looked up from the wallet if omitted)")
+      .option(...LendSmartOperate.slippageOption())
       .addOption(LendOptions.market())
       .option("--key <name>", "Key to use for signing")
       .action((opts) =>
-        this.operate({ ...opts, deposit: opts.amount }, "deposit")
+        this.operate(
+          { ...opts, deposit: opts.amount, deposit1: opts.amount1 },
+          "deposit"
+        )
       );
     borrow
       .command("withdraw")
-      .description("Withdraw collateral (all of it when --amount is omitted)")
+      .description(
+        "Withdraw collateral (all of it, in both pair tokens on a smart vault, when no amount is given)"
+      )
       .requiredOption("--position <id>", "Position ID")
-      .option("--amount <n>", "Collateral to withdraw")
+      .option("--amount <n>", `Collateral to withdraw, or 'max' (${MAX_LEG})`)
+      .option(
+        "--amount1 <n>",
+        `Collateral to withdraw, or 'max' (${SECOND_LEG})`
+      )
       .option("--vault <id>", "Vault ID (looked up from the wallet if omitted)")
+      .option(...LendSmartOperate.slippageOption())
       .addOption(LendOptions.market())
       .option("--key <name>", "Key to use for signing")
       .action((opts) =>
-        this.operate({ ...opts, withdraw: opts.amount ?? "max" }, "withdraw")
+        this.operate(
+          {
+            ...opts,
+            ...this.amountsOrMax("withdraw", opts.amount, opts.amount1),
+          },
+          "withdraw"
+        )
       );
     borrow
       .command("borrow")
       .description("Borrow more against a position")
       .requiredOption("--position <id>", "Position ID")
-      .requiredOption("--amount <n>", "Amount to borrow")
+      .option("--amount <n>", "Amount to borrow")
+      .option("--amount1 <n>", `Amount to borrow (${SECOND_LEG})`)
       .option("--vault <id>", "Vault ID (looked up from the wallet if omitted)")
+      .option(...LendSmartOperate.slippageOption())
       .addOption(LendOptions.market())
       .option("--key <name>", "Key to use for signing")
       .action((opts) =>
-        this.operate({ ...opts, borrow: opts.amount }, "borrow")
+        this.operate(
+          { ...opts, borrow: opts.amount, borrow1: opts.amount1 },
+          "borrow"
+        )
       );
     borrow
       .command("repay")
-      .description("Repay debt (all of it when --amount is omitted)")
+      .description(
+        "Repay debt (all of it, in both pair tokens on a smart vault, when no amount is given)"
+      )
       .requiredOption("--position <id>", "Position ID")
-      .option("--amount <n>", "Amount to repay")
+      .option("--amount <n>", `Amount to repay, or 'max' (${MAX_LEG})`)
+      .option("--amount1 <n>", `Amount to repay, or 'max' (${SECOND_LEG})`)
       .option("--vault <id>", "Vault ID (looked up from the wallet if omitted)")
+      .option(...LendSmartOperate.slippageOption())
       .addOption(LendOptions.market())
       .option("--key <name>", "Key to use for signing")
       .action((opts) =>
-        this.operate({ ...opts, repay: opts.amount ?? "max" }, "repay")
+        this.operate(
+          {
+            ...opts,
+            ...this.amountsOrMax("repay", opts.amount, opts.amount1),
+          },
+          "repay"
+        )
       );
     borrow
       .command("operate")
@@ -151,10 +213,18 @@ export class LendBorrowCommand {
       )
       .requiredOption("--position <id>", "Position ID")
       .option("--deposit <n>", "Collateral to deposit")
-      .option("--withdraw <n>", "Collateral to withdraw, or 'max'")
+      .option("--deposit1 <n>", `Collateral to deposit (${SECOND_LEG})`)
+      .option("--withdraw <n>", `Collateral to withdraw, or 'max' (${MAX_LEG})`)
+      .option(
+        "--withdraw1 <n>",
+        `Collateral to withdraw, or 'max' (${SECOND_LEG})`
+      )
       .option("--borrow <n>", "Amount to borrow")
-      .option("--repay <n>", "Amount to repay, or 'max'")
+      .option("--borrow1 <n>", `Amount to borrow (${SECOND_LEG})`)
+      .option("--repay <n>", `Amount to repay, or 'max' (${MAX_LEG})`)
+      .option("--repay1 <n>", `Amount to repay, or 'max' (${SECOND_LEG})`)
       .option("--vault <id>", "Vault ID (looked up from the wallet if omitted)")
+      .option(...LendSmartOperate.slippageOption())
       .addOption(LendOptions.market())
       .option("--key <name>", "Key to use for signing")
       .action((opts) => this.operate(opts, "operate"));
@@ -163,11 +233,35 @@ export class LendBorrowCommand {
       .description("Repay all debt and withdraw all collateral")
       .requiredOption("--position <id>", "Position ID")
       .option("--vault <id>", "Vault ID (looked up from the wallet if omitted)")
+      .option(...LendSmartOperate.slippageOption())
       .addOption(LendOptions.market())
       .option("--key <name>", "Key to use for signing")
       .action((opts) =>
-        this.operate({ ...opts, repay: "max", withdraw: "max" }, "close")
+        this.operate(
+          {
+            ...opts,
+            repay: "max",
+            repay1: "max",
+            withdraw: "max",
+            withdraw1: "max",
+          },
+          "close"
+        )
       );
+  }
+
+  // No amount means the whole side: proportionally across both pair tokens on
+  // a smart side (the normal path ignores the second leg).
+  private static amountsOrMax(
+    action: "withdraw" | "repay",
+    amount?: string,
+    amount1?: string
+  ): Partial<OperateOpts> {
+    const none = amount === undefined && amount1 === undefined;
+    return {
+      [action]: none ? "max" : amount,
+      [`${action}1`]: none ? "max" : amount1,
+    };
   }
 
   public static vaultSummary(vault: Vault) {
@@ -188,6 +282,9 @@ export class LendBorrowCommand {
       liquidationPenaltyPct: Number(vault.liquidationPenalty) / 100,
       maxMultiplier: LendMath.maxMultiplier(vault),
       multiply: vault.metadata.multiply.enabled,
+      // jup.ag Smart Earn: a smart-collateral vault held as a no-debt yield
+      // position.
+      earn: vault.metadata.earn,
       totalSupplyUsd: smartSupply
         ? null
         : amount(vault.totalSupply, vault.supplyToken) * supplyPrice,
@@ -599,15 +696,23 @@ export class LendBorrowCommand {
   }
 
   private static async operate(opts: OperateOpts, action: string) {
-    if (opts.deposit && opts.withdraw) {
+    const deposit = opts.deposit ?? opts.deposit1;
+    const withdraw = opts.withdraw ?? opts.withdraw1;
+    const borrow = opts.borrow ?? opts.borrow1;
+    const repay = opts.repay ?? opts.repay1;
+    if (deposit && withdraw) {
       throw new Error("Only one of --deposit or --withdraw can be provided.");
     }
-    if (opts.borrow && opts.repay) {
+    if (borrow && repay) {
       throw new Error("Only one of --borrow or --repay can be provided.");
     }
-    if (!opts.deposit && !opts.withdraw && !opts.borrow && !opts.repay) {
+    if (!deposit && !withdraw && !borrow && !repay) {
       throw new Error(
-        "Provide at least one of --deposit, --withdraw, --borrow or --repay."
+        action === "open"
+          ? "Provide --collateral (or --collateral1 on a smart vault)."
+          : action === "operate"
+            ? "Provide at least one of --deposit, --withdraw, --borrow or --repay."
+            : "Provide --amount (or --amount1 on a smart vault)."
       );
     }
     for (const [flag, value] of [
@@ -638,9 +743,21 @@ export class LendBorrowCommand {
       vault = nft.vault;
     }
     if (vault.type !== 1) {
+      return LendSmartOperate.operate({ opts, action, vault, nft, signer });
+    }
+    const bothMax = (a?: string, b?: string) => a === "max" && b === "max";
+    if (
+      opts.deposit1 ||
+      opts.borrow1 ||
+      (opts.withdraw1 && !bothMax(opts.withdraw, opts.withdraw1)) ||
+      (opts.repay1 && !bothMax(opts.repay, opts.repay1))
+    ) {
       throw new Error(
-        `Vault ${vault.id} is a smart (DEX) vault. The CLI only supports normal vaults; smart vaults need the @jup-ag/lend smart-vault SDK, which is not bundled.`
+        `Vault ${vault.id} is a normal vault; second-token amounts only apply to smart (pair) vaults.`
       );
+    }
+    if (!opts.deposit && action === "open") {
+      throw new Error("Provide --collateral.");
     }
 
     const supply = vault.supplyToken.token0;
@@ -838,29 +955,40 @@ export class LendBorrowCommand {
       action: string;
       vaultId: number;
       positionId: number;
-      collateral: { token: { symbol: string }; change: number; amount: number };
-      debt: { token: { symbol: string }; change: number; amount: number };
+      collateral: OperateSide;
+      debt: OperateSide;
       ltvPct: number;
       liquidationLtvPct: number;
       liquidationPrice: number | null;
       healthStatus: string | null;
       leverage?: number;
+      slippageBps?: number;
     },
     signature: string | null
   ): void {
     const signed = (n: number) => `${n > 0 ? "+" : ""}${this.formatAmount(n)}`;
+    const side = (label: string, s: OperateSide) => [
+      {
+        label,
+        value: `${this.formatAmount(s.amount)} ${s.token.symbol}${s.legs ? " shares" : ""} (${signed(s.change)})`,
+      },
+      ...(s.legs && s.legs.some((l) => l.change !== 0)
+        ? [
+            {
+              label: `${label} Tokens`,
+              value: s.legs
+                .map((l) => `${signed(l.change)} ${l.token.symbol}`)
+                .join(", "),
+            },
+          ]
+        : []),
+    ];
     Output.table({
       type: "vertical",
       rows: [
         { label: "Position", value: `${r.positionId} (vault ${r.vaultId})` },
-        {
-          label: "Collateral",
-          value: `${this.formatAmount(r.collateral.amount)} ${r.collateral.token.symbol} (${signed(r.collateral.change)})`,
-        },
-        {
-          label: "Debt",
-          value: `${this.formatAmount(r.debt.amount)} ${r.debt.token.symbol} (${signed(r.debt.change)})`,
-        },
+        ...side("Collateral", r.collateral),
+        ...side("Debt", r.debt),
         {
           label: "LTV",
           value: `${r.ltvPct}% (liquidation at ${r.liquidationLtvPct}%)`,
@@ -876,6 +1004,9 @@ export class LendBorrowCommand {
           ? []
           : [{ label: "Leverage", value: `${r.leverage}x` }]),
         { label: "Health", value: r.healthStatus ?? "—" },
+        ...(r.slippageBps === undefined
+          ? []
+          : [{ label: "DEX Slippage", value: `${r.slippageBps} bps` }]),
         ...(signature ? [{ label: "Tx Signature", value: signature }] : []),
       ],
     });

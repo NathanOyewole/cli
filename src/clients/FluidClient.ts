@@ -49,12 +49,36 @@ type SideRate = {
   vault: { rate: string; feeRate: string };
 };
 
+// A smart side's DEX pool snapshot: 9-decimal reserves and shares, 1e15
+// prices, fee in 1e6 units. `token0Debt`/`token1Debt` only exist on debt pools.
+export type DexData = {
+  token0RealReserves: string;
+  token1RealReserves: string;
+  token0ImaginaryReserves: string;
+  token1ImaginaryReserves: string;
+  token0Debt?: string;
+  token1Debt?: string;
+  totalShares: string;
+  maxShares: string;
+  token0PerShare: string;
+  token1PerShare: string;
+  fee: string;
+  pex: {
+    centerPrice: string;
+    upperRange: string;
+    lowerRange: string;
+    geometricMean: string;
+  };
+};
+
 export type Vault = {
   id: number;
   type: number;
   address: string;
   supplyToken: VaultSide;
   borrowToken: VaultSide;
+  supplyDexData?: DexData | null;
+  borrowDexData?: DexData | null;
   totalSupply: string;
   totalBorrow: string;
   supplyRateMagnifier: string;
