@@ -84,7 +84,7 @@ jup rewards progress --campaign tessera --address <wallet-address>
 ```
 
 - With no options, uses the active key's wallet. `--key` and `--address` are mutually exclusive.
-- `claimable` is true when the campaign is in its claim window and the wallet has unopened cards or an unclaimed amount.
+- `claimable` is true when the campaign is in its claim window (see [claim](#claim-rewards)) and the wallet has unopened cards or an unclaimed amount.
 - Fields depend on `rewardType`: lootbox campaigns report `openedBoxes`, `unopenedBoxes`, `progressPct` (toward the next card), `threshold` and `earningsUsd`; token campaigns report `unclaimedAmount` and `claimedAmount` (token amounts); volume-leaderboard campaigns add per-round `stats`.
 
 ```js
@@ -147,7 +147,8 @@ jup rewards claim --campaign <slug> --key mykey
 ```
 
 - Claims the full unclaimed amount for token campaigns. For lootbox campaigns it reveals mystery cards: `--boxes` sets how many (defaults to all unopened).
-- Fails unless the campaign is in its claim window.
+- Fails unless the campaign is in its claim window, like jup.ag: a campaign whose reward pool is used up still lets you claim what you earned, and fixed campaigns with no `claimEndsAt` stay claimable once claiming starts.
+- Campaigns whose `reward.onlyClaimableThroughJup` is true can only be claimed from a Jupiter wallet, so the CLI refuses and points to the campaign page on jup.ag.
 - The server builds the transaction; the CLI signs it and the server broadcasts it.
 - `--dry-run` returns the unsigned `transaction` without signing or submitting.
 
