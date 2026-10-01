@@ -22,3 +22,7 @@ export type ParityCase =
     };
 
 export const WALLET = "$WALLET";
+
+// Runs the case with a freshly generated local key instead of a watch-only
+// wallet, for flows that need a real message signature (e.g. sign-in).
+export const GENERATED_WALLET = "$GENERATED";

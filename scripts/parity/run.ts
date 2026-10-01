@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { FEATURES } from "./features.ts";
-import { WALLET, type ParityCase } from "./types.ts";
+import { GENERATED_WALLET, WALLET, type ParityCase } from "./types.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, "..", "..");
@@ -27,6 +27,14 @@ function makeHome(wallet: string): string {
   const home = mkdtempSync(join(tmpdir(), "jup-parity-"));
   const keys = join(home, ".config", "jup", "keys");
   mkdirSync(keys, { recursive: true });
+  if (wallet === GENERATED_WALLET) {
+    writeFileSync(
+      join(home, ".config", "jup", "settings.json"),
+      JSON.stringify({ activeKey: "watch", output: "json" })
+    );
+    runCli(home, ["keys", "add", "watch"]);
+    return home;
+  }
   writeFileSync(
     join(keys, "watch.keychain.json"),
     JSON.stringify({
