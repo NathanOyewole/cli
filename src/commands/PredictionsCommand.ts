@@ -115,7 +115,7 @@ export class PredictionsCommand {
       .option("--order <pubkey>", "Limit order to cancel")
       .option(
         "--slippage <bps>",
-        "Accept a quoted slippage up to this many bps (required when the quote is 5% or more)"
+        "Accept a quoted slippage up to this many bps (required when the quote is 5% or more, or would cost $2,000 or more of the sale)"
       )
       .option("--key <name>", "Key to use for signing")
       .action((opts) => this.close(opts));

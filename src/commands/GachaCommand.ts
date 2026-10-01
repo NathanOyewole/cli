@@ -103,7 +103,7 @@ export class GachaCommand {
       .description("Recent pulls across all packs")
       .option("--pack <code>", "Only pulls from this pack")
       .option("--epic", "Only epic pulls")
-      .option("--limit <n>", "Max results (10-200)", "10")
+      .option("--limit <n>", "Max results (up to 200)", "10")
       .action((opts) => this.winners(opts));
     gacha
       .command("leaderboard")

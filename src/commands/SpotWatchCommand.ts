@@ -80,7 +80,7 @@ export class SpotWatchCommand {
       .option("--token <token>", "Only trades of this token")
       .option(
         "--address <addresses>",
-        "Only these followed wallets (comma-separated)"
+        "Only these wallets (comma-separated; default: all followed wallets)"
       )
       .option("--min-usd <n>", "Minimum trade size (USD)", OptionParsers.number)
       .option("--max-usd <n>", "Maximum trade size (USD)", OptionParsers.number)
