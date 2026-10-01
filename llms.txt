@@ -20,7 +20,7 @@ On failure, commands exit with non-zero code with an error message. In JSON mode
 - [Deposit](docs/deposit.md): Receive address, cross-chain deposit addresses, fiat onramp and bridge quotes
 - [Stake](docs/stake.md): Native SOL staking, JupSOL and stake account management
 - [Perps](docs/perps.md): Perps trading (leveraged longs/shorts)
-- [Lend](docs/lend.md): Lending and yield farming
+- [Lend](docs/lend.md): Jupiter Lend earn, borrow vaults, Multiply, statistics and tools (main and Ethena markets)
 - [Predictions](docs/predictions.md): Prediction markets
 - [Rewards](docs/rewards.md): Reward campaigns, rankings, progress and claims
 - [Gacha](docs/gacha.md): Gacha packs, collectible cards, marketplace and shipping

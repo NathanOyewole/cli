@@ -33,7 +33,10 @@ bun run ci
 - `GachaCommand` — `gacha packs/open/gift/buyback/collection/activity/verify/winners/leaderboard`; registers `GachaMarketCommand` (`gacha marketplace/card/buy/list/delist`) and `GachaShippingCommand` (`gacha shipping/ship`)
 - `GiftCommand` — `gift create/claim/info/clawback/pending/history`
 - `KeysCommand` — `keys list/add/delete/edit/use/solana-import`
-- `LendCommand` — `lend earn tokens/positions/deposit/withdraw`
+- `LendCommand` — `lend earn tokens/positions/deposit/withdraw/history/chart` (all lend commands take `--market main|ethena`); registers:
+  - `LendBorrowCommand` — `lend borrow vaults/vault/positions/history/liquidations/open/deposit/borrow/repay/withdraw/operate/close`
+  - `LendMultiplyCommand` — `lend multiply vaults/open/set/close`
+  - `LendToolsCommand` — `lend markets`, `lend stats earn/borrow/liquidity/dex/positions`, `lend strategies/calculator/transparency` (static data in `LendTransparency.ts`)
 - `PerpsCommand` — `perps positions/markets/open/set/close`
 - `PortfolioCommand` — `portfolio positions/pnl/airdrops`, `portfolio addressbook list/add/remove`
 - `PredictionsCommand` — `predictions events/positions/open/close/history`; registers the predictions subcommand files below
@@ -63,7 +66,7 @@ bun run ci
 - `KeyPair` — generates/recovers keypairs (BIP39 mnemonics, BIP32 derivation)
 - `Output` — renders data as table (via cli-table3) or JSON based on config; also provides display formatters (`formatDollar`, `formatCompactDollar`, `formatBoolean`, `formatPercentageChange`)
 - `NumberConverter` — converts between human-readable and on-chain decimal amounts
-- `Swap` — shared swap execution logic used by SpotCommand and LendCommand; manual swap settings and Shield token warnings
+- `Swap` — shared swap execution logic used by SpotCommand; manual swap settings and Shield token warnings
 - `TriggerOrder` — pure limit/DCA order logic: intent → payload mapping, target prices (USD, market cap, % from market), expiry/interval parsing, minimums
 - `OrderTokens` — token metadata lookup for order lists (symbols, decimals, UI amounts)
 - `RewardsCampaign` — campaign status/claim-window rules and campaign application validation
@@ -74,6 +77,10 @@ bun run ci
 - `AddressBook` — saved wallets and groups in `~/.config/jup/addressbook.json`; resolves `--address` lists (incl. built-in `demo` wallets)
 - `InviteCode` — gift codes: generation and the `sha256("invite:" + code)` gift keypair, compatible with jup.ag/gift links
 - `PortfolioPositions` — normalizes Portfolio API elements (v1 and v2) into one position shape
+- `LendTx` — composes lend transactions with kit: API instruction conversion, compute budget, ATAs, SOL wrap/unwrap, v0 compile with lookup tables, size check, sign and send via `Rpc`
+- `LendFlashloan` — Jupiter Lend flashloan borrow/payback instructions (built from program IDs, seeds and IDL; no SDK)
+- `LendMath` — vault APYs, position health (LTV, liquidation price, status), max multiplier, APY from exchange price, days to liquidation
+- `LendOptions` — shared lend options (`--market`) and wallet resolution
 
 **API Clients** (`src/clients/`):
 
@@ -90,11 +97,13 @@ bun run ci
 - `IntelClient` — Jupiter Intel AI token description and news (requires an API key)
 - `UltraClient` — Jupiter Ultra swap API (quote + execute)
 - `PerpsClient` — Jupiter Perps API v2 (positions, orders, TP/SL)
-- `LendClient` — Jupiter Lend API (earn tokens, positions, earnings)
+- `LendClient` — Jupiter Lend API (earn tokens, positions, earnings, earn and borrow instruction builders)
 - `PredictionsClient` — Jupiter Predictions API v1 (events, markets, positions, orders, tickets, claims, history, profiles, leaderboards)
 - `PredictionsArcadeClient` — Predictions API v1 `play/*` (1-minute arcade rounds and bets)
 - `PredictionsCommunityClient` — Predictions API v1 clans, comments, and usernames (wallet-signed messages)
 - `PredictionsPriceClient` — Predict price service (price-to-beat REST, one-shot orderbook WebSocket)
+- `FluidClient` — Jupiter Lend indexer at api.solana.fluid.io used by jup.ag (earn history/charts, vaults, positions, PnL, liquidations, statistics)
+- `SwapV1Client` — Jupiter swap API v1 (quote + swap instructions) for composing swaps into lend multiply transactions
 - `VrfdClient` — Jupiter Token Verification API (eligibility check, payment, execute)
 - `TriggerClient` — Jupiter Trigger API v2 (`trigger-api.jup.ag`: limit + DCA orders, vault, signed-message JWT auth cached in `~/.config/jup/auth/{address}.json`) and legacy V1 limit/DCA order lists
 - `RewardsClient` — Jupiter Rewards API on datapi.jup.ag (campaigns, stats, leaderboards, claims) and remote-api.jup.ag campaign applications
@@ -108,7 +117,11 @@ bun run ci
 
 **Perps flow:** PerpsClient.post* → Signer.signTransaction → PerpsClient.postExecute
 
-**Lend deposit/withdraw flow:** LendClient.getTokens → resolve jlToken → Swap.execute → LendClient.getPositions (updated state)
+**Lend earn flow:** LendClient.getTokens → LendClient.postEarnInstructions → LendTx (ATAs, SOL wrap, compile) → Signer.signTransaction → Rpc.sendAndConfirm
+
+**Lend borrow flow:** FluidClient (vault/position) → LendClient.postOperateInstructions → LendTx → Signer.signTransaction → Rpc.sendAndConfirm
+
+**Lend multiply flow:** LendFlashloan.borrowIx → SwapV1Client swap instruction → LendClient.postOperateInstructions → LendFlashloan.paybackIx → LendTx.compile (fits check) → Rpc.sendAndConfirm
 
 **Predictions flow:** PredictionsClient.postOrder → Signer.signTransaction → PredictionsClient.postExecute (echoes `execution.context`) → PredictionsExecution.waitForFill (orders, then history)
 
