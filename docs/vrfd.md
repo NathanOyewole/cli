@@ -21,8 +21,8 @@ jup vrfd check --token <mint-address>
   "isVerified": false, // whether the token is already verified
   "canVerify": true, // whether verification can be submitted
   "canMetadata": true, // whether token metadata can be updated
-  "verificationError": null, // string if canVerify is false
-  "metadataError": null // string if canMetadata is false
+  "verificationError": null, // string if canVerify is false (may be absent)
+  "metadataError": null // string if canMetadata is false (may be absent)
 }
 ```
 
@@ -42,7 +42,8 @@ jup vrfd submit --token <mint> --project-twitter @projecthandle --description "P
 - `--description` (required) — reason for verification request
 - `--sender-twitter` sets the submitter's Twitter/X handle
 - `--key` overrides the active key for this transaction
-- `--dry-run` previews the payment transaction without signing. JSON response includes the unsigned base64 `transaction`.
+- `--dry-run` previews the payment transaction without signing. JSON response includes `"dryRun": true` and the unsigned base64 `transaction`; `status`, `signature`, `verificationCreated` and `metadataCreated` are `null`.
+- Fails if the token does not exist, is already verified, is not eligible (`canVerify` false), or if `--meta-*` options are passed while `canMetadata` is false.
 - Inline metadata options are listed under [metadata options](#metadata-options) below
 
 ```js
@@ -50,14 +51,14 @@ jup vrfd submit --token <mint> --project-twitter @projecthandle --description "P
 {
   "sender": "ABC1...xyz", // sender wallet address
   "tokenId": "So11111111111111111111111111111111111111112", // token mint address
-  "status": "Success", // "Success" or "Failed"
+  "status": "Success", // a "Failed" execution is reported as an error instead
   "signature": "2Goj...diEc", // tx signature
   "paymentAmount": "1000", // JUP amount paid for verification
   "paymentMint": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", // payment token mint
-  "feeUsd": 0.85, // USD value of fee
+  "feeUsd": 0.85, // USD value of fee (null if unavailable)
   "verificationCreated": true, // whether verification request was created
   "metadataCreated": false, // whether metadata was updated
-  "metadata": null // token metadata object if --meta-* options were provided
+  "metadata": null // token metadata object if --meta-* options were provided (keys: tokenId plus name, symbol, icon, tokenDescription, website, ...)
 }
 ```
 
@@ -70,7 +71,7 @@ Pass token metadata inline with `--meta-` prefixed options. All are optional.
 - `--meta-name <name>`: Token name
 - `--meta-symbol <symbol>`: Token symbol/ticker
 - `--meta-icon <url>`: Token icon URL
-- `--meta-description <text>`: Token description
+- `--meta-description <text>`: Token description (sent as `tokenDescription`)
 - `--meta-website <url>`: Token website URL
 - `--meta-twitter <url>`: Token Twitter/X URL (distinct from `--project-twitter`, which is the project handle for the verification request)
 - `--meta-twitter-community <url>`: Twitter community URL

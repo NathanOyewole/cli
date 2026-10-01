@@ -26,6 +26,22 @@ jup keys add <name> --seed-phrase "word1 word2 ..." --derivation-path "m/44'/501
 jup keys add <name> --private-key <key> # accepts hex, base58, base64, or a JSON byte array
 ```
 
+`--overwrite` replaces an existing key with the same name. `--file`, `--seed-phrase`, `--private-key` and `--backend` are mutually exclusive.
+
+### Import a Solana CLI keypair
+
+Copy the default Solana CLI keypair (`~/.config/solana/id.json`) into the keystore as `default`:
+
+```bash
+jup keys solana-import
+jup keys solana-import --name mykey --path /path/to/keypair.json
+jup keys solana-import --overwrite
+```
+
+- `--name` key name (default `default`)
+- `--path` Solana keypair file (default `~/.config/solana/id.json`)
+- `--overwrite` replace an existing key with the same name
+
 ### Add a keychain-backed key
 
 Connect a remote signer using `--backend` and `--param`:
@@ -99,6 +115,8 @@ jup keys list
 ```bash
 jup keys use <name>
 ```
+
+`keys add`, `keys use`, `keys edit`, `keys delete` and `keys solana-import` print the updated key list (same shape as `keys list`).
 
 ### Edit a key
 

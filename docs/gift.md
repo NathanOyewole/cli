@@ -18,10 +18,10 @@ jup gift create --token USDC --amount 5 --key mykey
 jup gift create --token <mint> --raw-amount 1000000 --dry-run
 ```
 
-- `--token` resolves against tokens in your wallet (symbol or mint)
+- `--token` is a mint address, `SOL`/`BTC`/`ETH`/`USDC`, or the symbol of a token held in your wallet (ambiguous symbols are rejected: use the mint)
 - Exactly one of `--amount` or `--raw-amount` is required
 - Share `link` privately: it is the claim link
-- `--dry-run` returns the `transaction` already signed by the gift keypair; it needs only the sender's signature
+- `--dry-run` (global flag) adds `dryRun: true` and the `transaction` already signed by the gift keypair (it needs only the sender's signature), with `signature` and `status` null. `claim` and `clawback` support `--dry-run` too and return `dryRun` and `transaction` the same way.
 - Before submitting, the link is written to stderr so it survives a timeout or crash. If submitting fails, the error repeats the link and includes the transaction signature
 
 ```js
@@ -87,7 +87,8 @@ jup gift clawback --invite <gift-address>
 jup gift clawback --code <code-or-link>
 ```
 
-- Returns the funds of an unclaimed gift to the sender. Use the `invite` address from `jup gift pending`, or the code.
+- Returns the funds of an unclaimed gift to the sender. Provide exactly one of `--invite` (the `invite` address from `jup gift pending`) or `--code`.
+- `token` and `amount` are `null` if the API does not report them
 
 ```js
 // Example JSON response:
@@ -110,7 +111,8 @@ jup gift history --address <wallet-address> --offset 10
 ```
 
 - `pending` lists unclaimed gifts you sent; `history` lists claimed, cancelled and expired ones
-- `--offset` must be a multiple of `--limit`; `next` is the offset of the next page, or `null`
+- `--limit` is 1-100 (default 10); `--offset` (default 0) must be a multiple of `--limit`; `next` is the offset of the next page, or `null`
+- Looks up the active key's wallet; `--key` or `--address` picks another (mutually exclusive). `--address` needs no local key.
 
 ```js
 // Example JSON response:

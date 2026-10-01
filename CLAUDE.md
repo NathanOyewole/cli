@@ -12,8 +12,14 @@ Jupiter CLI (`jup`) — a TypeScript CLI for interacting with Jupiter's products
 # Run in development
 bun run dev
 
+# Bundle to dist/index.js (node)
+bun run build
+
 # Compile to standalone binary
 bun build src/index.ts --compile --outfile jup
+
+# Run parity cases against the live APIs (scripts/parity)
+bun run parity
 
 # Format code
 bunx prettier --write .
@@ -24,7 +30,7 @@ bun run ci
 
 ## Architecture
 
-**Entry point:** `src/index.ts` — initializes config, registers 15 command groups with Commander.
+**Entry point:** `src/index.ts` — initializes config, registers 15 command groups with Commander. Global options: `-f, --format <table|json>` (overrides the configured output format) and `--dry-run` (preview the transaction without signing or submitting).
 
 **Commands** (`src/commands/`): Static classes that register subcommands. Each delegates to library modules.
 
@@ -38,7 +44,7 @@ bun run ci
   - `LendMultiplyCommand` — `lend multiply vaults/open/set/close`; smart-collateral vaults go through `LendSmartMultiply` (swap-free flashloan loop)
   - `LendToolsCommand` — `lend markets`, `lend stats earn/borrow/liquidity/dex/positions`, `lend strategies/calculator/transparency` (static data in `LendTransparency.ts`)
 - `PerpsCommand` — `perps positions/markets/open/set/close/history`; registers the perps subgroups below. `PerpsCollateral` implements `perps set --add-collateral/--remove-collateral`
-- `PerpsJlpCommand` — `perps jlp info/mint/burn`
+- `PerpsJlpCommand` — `perps jlp info/mint/burn` (aliases `buy`/`sell`)
 - `PerpsLoansCommand` — `perps loans info/positions/history/borrow/repay`
 - `PerpsLeaderboardCommand` — `perps leaderboard/stats`
 - `PerpsDeltaNeutralCommand` — `perps delta-neutral info/history/positions/deposit/withdraw`
@@ -47,13 +53,13 @@ bun run ci
 - `PredictionsCommand` — `predictions events/positions/open/close/history`; registers the predictions subcommand files below
 - `PredictionsAccountCommand` — `predictions orders/claim/leaderboard/profile/pnl/set-username`
 - `PredictionsArcadeCommand` — `predictions arcade rounds/open/positions/history`
-- `PredictionsCommunityCommand` — `predictions clans ...`, `predictions comments list/post/like/delete`
+- `PredictionsCommunityCommand` — `predictions clans list/get/rankings/invites/create/join/leave/invite/accept/revoke/approve/reject/kick`, `predictions comments list/post/like/delete`
 - `PredictionsDiscoveryCommand` — `predictions categories/suggested/market/timed/score/price-history/trades/orderbook`
 - `RewardsCommand` — `rewards campaigns/leaderboard/progress/unclaimed/claim/apply`
 - `SignCommand` — `sign --tx <base64>`
 - `SpotCommand` — `spot tokens/quote/swap/portfolio/history/transfer/reclaim`
 - `SpotDcaCommand` — `spot dca open/orders/history/close` (registered under `spot`)
-- `SpotDiscoveryCommand` — `spot tokens --list`, `spot pulse/heatmap/alphascan/categories/launchpads/smart-money/stocks` (registered under `spot`)
+- `SpotDiscoveryCommand` — `spot tokens --list`, `spot pulse/heatmap/alphascan/categories/launchpads/stocks`, `spot smart-money wallets/trades/summary` (registered under `spot`)
 - `SpotLimitCommand` — `spot limit open/orders/history/set/close` (registered under `spot`)
 - `SpotTokenCommand` — `spot token info/chart/net-volume/holders/traders/txs/dev/pools/about/news`
 - `SpotWatchCommand` — `spot watchlist list/add/remove/use/delete`, `spot tracker list/add/remove/trades/import/export`
@@ -67,9 +73,10 @@ bun run ci
 - `Config` — manages `~/.config/jup/settings.json` (activeKey, output format, API key, RPC URL)
 - `Rpc` — sends signed transactions straight to Solana and confirms them, for flows without a Jupiter execute endpoint
 - `DcaV1` — builds the legacy V1 DCA close transaction client-side
-- `Signer` — loads keypairs from `~/.config/jup/keys/{name}.json`, signs transactions and messages
+- `Signer` — loads keypairs from `~/.config/jup/keys/{name}.json` (or keychain-backed remote signers), signs transactions and messages
+- `KeychainConfig` — remote signer (solana-keychain) configs in `~/.config/jup/keys/{name}.keychain.json`
 - `KeyPair` — generates/recovers keypairs (BIP39 mnemonics, BIP32 derivation)
-- `Output` — renders data as table (via cli-table3) or JSON based on config; also provides display formatters (`formatDollar`, `formatCompactDollar`, `formatBoolean`, `formatPercentageChange`)
+- `Output` — renders data as table (via cli-table3) or JSON based on config; also provides display formatters (`formatDollar`, `formatCompactDollar`, `formatDollarChange`, `formatBoolean`, `formatPercentageChange`)
 - `NumberConverter` — converts between human-readable and on-chain decimal amounts
 - `Swap` — shared swap execution logic used by SpotCommand; manual swap settings and Shield token warnings
 - `JtxOrder` — JTX order sizing (collateral × leverage within margin and fee), price/size snapping, order limits
@@ -94,9 +101,6 @@ bun run ci
 - `LendTicks` — borrow-vault tick, branch and liquidation simulation used to pick the operate instruction's tick accounts
 - `LendDexOperate` — hand-built smart vault `operate_dex`/`operate_perfect_dex` instructions with their accounts and lookup tables (no SDK)
 - `LendSmart` — jup.ag smart-side helpers: API DEX snapshot to math context, share bounds, full exits, share splits, Smart Multiply flashloan sizing
-
-**API Clients** (`src/clients/`):
-
 - `TokenFilters` — jup.ag screener filters as CLI options, mapped to datapi params
 - `TokenView` — maps datapi assets to token rows and renders token tables
 - `OptionParsers` — commander argument parsers (positive ints, numbers, lists, timestamps)
@@ -105,6 +109,7 @@ bun run ci
 
 **API Clients** (`src/clients/`):
 
+- `ClientConfig` — shared ky instance (`x-client-platform` header, `x-api-key` only for api.jup.ag, 429 handling) and API host (`api.jup.ag` with an API key, else `lite-api.jup.ag`)
 - `DatapiClient` — Jupiter token data/search API, plus datapi.jup.ag discovery data (lists, gems, heatmap, categories, launchpads, smart money, charts, holders, txs, shield, stocks, tracker trades)
 - `ContentClient` — content-api.jup.ag market briefs (Market Pulse)
 - `IntelClient` — Jupiter Intel AI token description and news (requires an API key)

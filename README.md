@@ -1,6 +1,6 @@
 # Jupiter CLI
 
-CLI for interacting with Jupiter's products on Solana: Spot, Perps, Lend, Prediction Markets, Token Verification and more.
+CLI for interacting with Jupiter's products on Solana: Spot, Perps, Lend, Prediction Markets, Portfolio, Stake, Gacha, Rewards, Token Verification and more.
 
 > [!WARNING]
 > This project is pre-v1 (early alpha) and should be considered unstable. Breaking changes may be introduced without warning. Please reach out to the team if you'd like to use or contribute to the CLI.
@@ -81,6 +81,11 @@ jup vrfd submit --token <mint-address> --project-twitter @projecthandle --descri
 - [Keys](docs/keys.md): Private key management
 - [Sign](docs/sign.md): Sign transactions from `--dry-run`
 - [Spot](docs/spot.md): Spot trading (swaps, limit orders, DCA), transfers, token search and portfolio data
+- [Spot Discovery](docs/spot-discovery.md): Token lists, screener, Smart Money, token detail, watchlists and wallet tracker
+- [Portfolio](docs/portfolio.md): Net worth, DeFi positions, spot PnL, airdrops and the address book across wallets
+- [Gift](docs/gift.md): Send tokens as claimable gift links
+- [Deposit](docs/deposit.md): Receive address, cross-chain deposit addresses, fiat onramp and bridge quotes
+- [Stake](docs/stake.md): Native SOL staking, JupSOL and stake account management
 - [Perps](docs/perps.md): Perps trading (leveraged longs/shorts)
 - [Lend](docs/lend.md): Lending and yield farming
 - [Predictions](docs/predictions.md): Prediction markets

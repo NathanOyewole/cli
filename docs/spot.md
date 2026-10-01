@@ -1,6 +1,8 @@
 # Spot Trading
 
-Requires: an active key for swap, transfer, limit order and DCA commands. See [setup](setup.md).
+Requires: an active key (or `--key <name>`) for `swap`, `transfer`, `reclaim`, and limit order and DCA commands. `portfolio`, `history` and the `--v1` order lists also accept `--address <wallet-address>` instead. `quote` and `tokens` need no key. See [setup](setup.md).
+
+All write commands support the global `--dry-run` flag: nothing is signed or submitted, and the JSON response adds `dryRun: true` plus the unsigned `transaction` (or `transactions`) where one is built, with `signature` null.
 
 ## Token resolution
 
@@ -11,8 +13,8 @@ Anywhere a token is specified (`--from`, `--to`, `--token`, `--search`), you can
 
 Token resolution depends on the context:
 
-- **Wallet-bound options** (`swap --from`, `transfer --token`, `reclaim --token`, `limit open --from`, `dca open --from`) resolve against the tokens in your wallet. This ensures the CLI matches the token you actually hold, not a different token with the same symbol. If the token is not found in your wallet, the command errors. If multiple tokens share the same symbol, the CLI asks you to use the mint address instead.
-- **All other options** (`swap --to`, `quote --from`, `quote --to`, `tokens --search`, `history --token`) resolve via Jupiter's global token search, picking the top result.
+- **Wallet-bound options** (`swap --from`, `transfer --token`, `reclaim --token`, `limit open --from`, `dca open --from`) resolve a symbol against the tokens in your wallet. This ensures the CLI matches the token you actually hold, not a different token with the same symbol. If the token is not found in your wallet, the command errors. If multiple tokens share the same symbol, the CLI asks you to use the mint address instead. A mint address, or `SOL`, `BTC`, `ETH` or `USDC`, skips the wallet lookup. For `reclaim --token`, only tokens with a reclaimable account count.
+- **All other options** (`swap --to`, `quote --from`, `quote --to`, `limit open --to`, `dca open --to`, `tokens --search`, `history --token`, `limit orders --token`, `dca orders --token`) resolve via Jupiter's global token search, picking the top result.
 
 ## Commands
 
@@ -24,6 +26,9 @@ jup spot tokens --search <query> --limit 5
 jup spot tokens --search <mint-address>
 jup spot tokens --search "<mint1>,<mint2>"
 ```
+
+- Exactly one of `--search` or `--list` is required. `--interval`, `--sort`, `--offset` and the screener filters only apply with `--list`
+- JSON is an array of Jupiter token objects (`id`, `symbol`, `name`, `decimals`, `usdPrice`, `mcap`, `liquidity`, `isVerified`, `organicScore`, ...). The table shows Address, Symbol, Name, Price, Market Cap and Verified
 
 ### Browse token lists
 
@@ -45,9 +50,9 @@ jup spot quote --from SOL --to USDC --amount 1 --exclude-routers jupiterz --excl
 
 - `--amount` uses human-readable units (e.g. `1` SOL = 1 SOL)
 - `--raw-amount` uses on-chain units (e.g. `1000000000` lamports = 1 SOL)
-- Exactly one of `--amount` or `--raw-amount` is required
+- Exactly one of `--amount` or `--raw-amount` is required (same for `swap`, `transfer`, `limit open` and `dca open`)
 - `--exact-out` treats the amount as the exact output amount (in `--to` units) and quotes the required input
-- `--exclude-dexes` / `--exclude-routers` take comma-separated DEX labels / router IDs (`metis`, `jupiterz`, `hashflow`, `dflow`)
+- `--exclude-dexes` / `--exclude-routers` take comma-separated DEX labels / router IDs (`metis`, `jupiterz`, `hashflow`, `dflow`); an unknown router is rejected
 - `warnings` lists Jupiter Shield warnings for both tokens (e.g. transfer fees, freeze authority, not verified). They are advisory; `null` if Shield could not be reached
 
 ```js
@@ -84,15 +89,15 @@ jup spot swap --from SOL --to USDC --amount 1 --jito-tip 10000 --exclude-routers
 ```
 
 - `--key` overrides the active key for this transaction
-- `--slippage` sets max slippage in basis points (e.g. `50` = 0.5%). Recommended to be emtpy: Jupiter's Real-Time Slippage Estimation (RTSE) automatically picks an optimal value.
-- `--dry-run` previews the swap without signing or submitting. The API still simulates the transaction, so errors like insufficient balance are caught. In JSON mode, the response includes the unsigned base64 `transaction` for external signing.
+- `--slippage` sets max slippage in basis points (e.g. `50` = 0.5%). Must be a non-negative integer. Recommended to be empty: Jupiter's Real-Time Slippage Estimation (RTSE) automatically picks an optimal value.
+- `--dry-run` previews the swap without signing or submitting. The API still simulates the transaction, so errors like insufficient balance are caught. In JSON mode, the response adds `dryRun: true` and the unsigned base64 `transaction` for external signing, with `signature` null.
 - `warnings` lists Jupiter Shield warnings for both tokens (same shape as `quote`). They never block the swap.
 
 Manual swap settings (the same ones as the jup.ag "Manual" settings panel). Leave them out to let Jupiter pick automatically:
 
 - `--exact-out`: the amount is the exact output amount (in `--to` units)
-- `--priority-fee <lamports>`: priority fee for the transaction
-- `--jito-tip <lamports>`: Jito tip (min 1000 lamports); can be combined with `--priority-fee`
+- `--priority-fee <lamports>`: priority fee for the transaction (integer)
+- `--jito-tip <lamports>`: Jito tip (integer, min 1000 lamports); can be combined with `--priority-fee`
 - `--fee-type <max-cap|exact-fee>`: whether `--priority-fee`/`--jito-tip` is a cap (the jup.ag default) or the exact amount to pay
 - `--use-wsol`: use wrapped SOL instead of native SOL
 - `--exclude-dexes <labels>`: comma-separated DEX labels to route around (e.g. `"Raydium,Meteora DLMM"`)
@@ -124,7 +129,9 @@ jup spot portfolio --address <wallet-address>
 ```
 
 - With no options, uses the active key's wallet
-- `--address` looks up any wallet without needing a key
+- `--address` looks up any wallet without needing a key. `--key` and `--address` are mutually exclusive
+- Native SOL and wrapped SOL are combined into one `SOL` entry. Tokens are sorted by `value`, descending
+- Non-SOL tokens also carry `reclaimableLamports` (rent `spot reclaim` can recover, when reported) and, for scaled-UI tokens such as tokenized stocks, `scaledUiMultiplier`
 
 ```js
 // Example JSON response:
@@ -139,7 +146,7 @@ jup spot portfolio --address <wallet-address>
       "rawAmount": "10500000000", // on-chain integer balance
       "value": 892.50, // USD value of holdings
       "price": 85.00, // current token USD price
-      "priceChange": 0.032, // 24h price change; 0.032 means 3.2%
+      "priceChange": 3.2, // 24h price change; 3.2 means +3.2%
       "isVerified": true
     }
   ]
@@ -155,13 +162,14 @@ jup spot reclaim --token USDC
 jup spot reclaim --dry-run
 ```
 
-- With no options, reclaims rent from all empty Associated Token Accounts (ATA) owned by the active key's wallet
-- `--dry-run` previews reclaimable amount without executing. JSON response includes the unsigned base64 `transactions` array.
+- With no options, reclaims rent from all empty Associated Token Accounts (ATA) owned by the active key's wallet. Accounts Jupiter will not close are skipped (verified or frozen tokens)
+- `--token` limits it to one token (symbol or mint address)
+- `--dry-run` previews reclaimable amount without executing. JSON response adds `dryRun: true` and the unsigned base64 `transactions` array, with `signatures` null.
 
 ```js
 // Example JSON response:
 {
-  "totalLamportsReclaimed": 5000, // divide by 10^9 for total SOL reclaimed
+  "totalLamportsReclaimed": 5000, // net of the service fee; divide by 10^9 for total SOL reclaimed
   "totalValueReclaimed": 0.005, // USD value of reclaimed SOL
   "networkFeeLamports": 5000, // divide by 10^9 for SOL fee
   "signatures": [ // array of tx signatures for each batch of reclaim tx
@@ -180,11 +188,12 @@ jup spot history --address <wallet-address> --after 2025-01-01 --before 2025-02-
 jup spot history --address <wallet-address> --limit 10 --offset 123
 ```
 
-- With no `--address` or `--key`, uses the active key's wallet
+- With no `--address` or `--key`, uses the active key's wallet. `--key` and `--address` are mutually exclusive
 - `--token` filters by token (symbol or mint address)
 - `--after` / `--before` accept ISO 8601 dates or UNIX timestamps
-- `--limit` defaults to 10, max 15
-- `--offset` is used for pagination; use the `next` value from the previous response to fetch the next page of results
+- `--limit` defaults to 10; at most 15 trades are returned per page
+- `--offset` is used for pagination; use the `next` value from the previous response to fetch the next page of results. `next` is `null` on the last page
+- A trade whose sell or buy leg is missing has `null` for that side's token, amount and USD value
 
 ```js
 // Example JSON response:
@@ -217,7 +226,7 @@ jup spot transfer --token SOL --to <recipient-address> --amount 1 --dry-run
 
 - Works with both SOL and any SPL token
 - `--token` accepts a symbol or mint address
-- `--dry-run` previews the transfer without signing. JSON response includes the unsigned base64 `transaction`.
+- `--dry-run` previews the transfer without signing. JSON response adds `dryRun: true` and the unsigned base64 `transaction`, with `signature` null.
 
 ```js
 // Example JSON response:
@@ -279,12 +288,13 @@ jup spot limit open --from SOL --to USDC --amount 1 --intent take-profit --price
 | `otoco`         | buy  | `--to`           | entry at `--price`, then `--tp` / `--sl` exits      | `--price`, `--tp` and/or `--sl`     |
 
 - `--amount` / `--raw-amount` is the amount of `--from` to sell. Minimum order size is $10
+- Options that do not belong to the intent are rejected. `take-profit`, `stop-loss`, `buy-dip` and `buy-pump` require `--price`; `trailing-stop` requires `--trailing`; `oco` requires both `--tp` and `--sl` (`--tp` above `--sl`); `otoco` requires `--price` and at least one of `--tp` (above the entry) or `--sl` (below the entry)
 - `--price`, `--tp` and `--sl` accept a USD price (`250`), or a signed percentage from the current price (`+10%`, `-5%`). For `otoco`, `--tp`/`--sl` percentages are relative to the entry `--price`
 - `--mcap` reads `--price`, `--tp` and `--sl` as market caps in USD (converted with the token's circulating supply)
-- `--slippage` (bps) applies to every leg of the order. When omitted, stop-loss legs, trailing stops and `buy-pump` use 2000 (20%) and everything else lets Jupiter pick (`null`), matching jup.ag
+- `--slippage` (integer bps, 0-10000) applies to every leg of the order. When omitted, stop-loss legs, trailing stops, `buy-pump` and an `otoco` entry above the current price use 2000 (20%) and everything else lets Jupiter pick (`null`), matching jup.ag
 - `--expiry` defaults to `7d`. Presets `1h`, `1d`, `7d`, `30d`, or any duration (`30m`, `12h`, `2w`, `1mo`, or seconds), up to 10 years
 - Pairs follow jup.ag's orientation: `oco` sells a token for USDC, USDT or SOL, `otoco` buys one with them, and a stablecoin (USDC, USDT) is never the watched token. Other unsupported pairs are rejected by Jupiter's pair check before depositing
-- `--dry-run` returns the unsigned deposit `transaction` without creating the order
+- `--dry-run` returns `dryRun: true` and the unsigned deposit `transaction` without creating the order
 
 ```js
 // Example JSON response:
@@ -320,8 +330,9 @@ jup spot limit history --limit 20 --offset 20
 jup spot limit orders --key mykey
 ```
 
-- `--limit` defaults to 10 (max 100); use `next` as `--offset` for the next page
+- `--limit` defaults to 10 (1-100); `--offset` defaults to 0; use `next` as `--offset` for the next page
 - `--token` filters by input or output token
+- `--address` only works with `--v1`; V2 orders can only be read with a key. `--key` and `--address` are mutually exclusive
 
 ```js
 // Example JSON response:
@@ -367,10 +378,11 @@ jup spot limit set --order <orderId> --slippage 300
 ```
 
 - Single orders accept `--price` (or `--trailing` for trailing stops); `oco` accepts `--tp`/`--sl`; `otoco` accepts `--price`, `--tp` and `--sl`. `--slippage` updates every leg. `--mcap` works as in `open`
-- Updates need no transaction. `--dry-run` shows the update without applying it
+- `--slippage` is an integer in bps (0-10000). At least one of `--price`, `--tp`, `--sl`, `--trailing` or `--slippage` is required, and a flag that does not fit the order type (for example `--price` on an `oco`) is rejected
+- Updates need no transaction. `--dry-run` shows the update (with `dryRun: true`) without applying it
 
 ```js
-// Example JSON response (only updated fields are included):
+// Example JSON response (only updated fields are included; slippage updates add slippageBps, tpSlippageBps and slSlippageBps):
 {
   "orderId": "01a0f4bc-...",
   "orderType": "single",
@@ -386,7 +398,7 @@ jup spot limit close --order <orderId> --dry-run
 ```
 
 - Cancelling withdraws the remaining input from the vault back to your wallet
-- `--dry-run` only reads the order and shows what would be withdrawn, with `transaction: null`. Jupiter builds the withdrawal transaction only when a cancel starts, and starting a cancel stops the order from filling, so a dry run must not request it
+- `--dry-run` only reads the order and shows what would be withdrawn, with `dryRun: true`, `signature: null` and `transaction: null`. Jupiter builds the withdrawal transaction only when a cancel starts, and starting a cancel stops the order from filling, so a dry run must not request it
 
 ```js
 // Example JSON response:
@@ -409,6 +421,8 @@ jup spot limit history --v1
 jup spot limit close --v1 --order <orderId>
 jup spot limit close --v1 --order all # cancel every open V1 order
 ```
+
+`--order all` is only supported with `--v1`; V2 orders are cancelled one at a time. `--v1` lists take either `--key` or `--address` (not both).
 
 - V1 orders use the same list shape, with `orderType: "v1"`, `intent: null`, no trigger prices, and `outAmount` set to the requested output amount
 - V1 `close` returns `{ "orderIds": [...], "signatures": [...] }` (one transaction per batch of up to 5 orders); `--dry-run` returns the unsigned `transactions`. If a transaction fails to land, the command stops and the error lists the signatures of batches that already landed
@@ -434,8 +448,9 @@ jup spot dca open --from USDC --to SOL --amount 100 --orders 4 --interval 1w --e
 - `--orders` is between 2 and 100; each order must be worth at least $10
 - `--interval` is `30m`, `1h`, `1d`, `1w`, `1mo` (30 days), any multiple (e.g. `4h`), or seconds; between 1 minute and 1 year
 - `--min-price` / `--max-price` (USD price of `--to`) skip orders outside the range
+- `--min-price` / `--max-price` must be positive, with `--min-price` below `--max-price`
 - `--earn` ("Earn while you wait") is only for USDC, USDT or JupUSD inputs without a price range
-- `--dry-run` returns the unsigned deposit `transaction` without creating the order
+- `--dry-run` returns `dryRun: true` and the unsigned deposit `transaction` without creating the order
 
 ```js
 // Example JSON response:
@@ -464,7 +479,8 @@ jup spot dca orders --token SOL --limit 20
 jup spot dca orders --v1 --address <wallet-address> # legacy V1 orders
 ```
 
-- `--v1` lists legacy V1 orders (no sign-in, so `--address` works; `--token` is not supported). V1 entries have `nextOrderAt: null` and no price range
+- `--limit` defaults to 10 (1-100) and `--offset` to 0, as for limit orders. `--address` only works with `--v1`
+- `--v1` lists legacy V1 orders (no sign-in, so `--address` works; `--token` is not supported). V1 entries have `nextOrderAt: null`, no price range, `earn: false` and `state` `active`, `completed` or `cancelled`
 
 ```js
 // Example JSON response:
@@ -502,8 +518,8 @@ jup spot dca close --order <orderId>
 jup spot dca close --order <orderId> --dry-run
 ```
 
-- `--dry-run` only reads the order and shows what would be withdrawn, with `transaction: null`, for the same reason as [limit `close`](#cancel-a-limit-order): requesting the withdrawal transaction starts the cancel
-- Legacy V1 DCA orders are closed with `jup spot dca close --v1 --order <order-account>`. The CLI builds the close transaction itself and sends it through your RPC (`jup config set --rpc-url`); unspent input and bought tokens return to your wallet, and wrapped SOL is unwrapped.
+- `--dry-run` only reads the order and shows what would be withdrawn, with `dryRun: true`, `signature: null` and `transaction: null`, for the same reason as [limit `close`](#cancel-a-limit-order): requesting the withdrawal transaction starts the cancel
+- Legacy V1 DCA orders are closed with `jup spot dca close --v1 --order <order-account>`. The CLI builds the close transaction itself and sends it through your RPC (`jup config set --rpc-url`); unspent input and bought tokens return to your wallet, and wrapped SOL is unwrapped. Its JSON response is `{ "orderId", "signature" }`; with `--dry-run` it adds `dryRun: true` and the unsigned `transaction`, with `signature` null.
 
 ```js
 // Example JSON response:

@@ -16,7 +16,7 @@ jup update --check
 
 1. Checks the latest release on GitHub
 2. Compares with the installed version
-3. If a newer version is available, fetches and runs `install.sh` which handles the update (Volta → npm → standalone binary fallback)
+3. If a newer version is available, fetches and runs `install.sh`, which updates using the method that installed `jup` (Volta, npm global, or standalone binary)
 4. Outputs the result
 
 ## JSON output

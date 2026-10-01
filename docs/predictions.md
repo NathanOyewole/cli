@@ -1,6 +1,6 @@
 # Prediction Markets
 
-Requires: an active key for trading commands (`open`, `close`, `claim`, `arcade open`) and for signed community actions (`clans` writes, `comments` writes, `set-username`). Reads accept `--address` for any wallet. See [setup](setup.md).
+Requires: an active key for trading commands (`open`, `close`, `claim`, `arcade open`) and for signed community actions (`clans` writes and `clans invites`, `comments` writes and `comments list --clan`, `set-username`). Wallet reads (`positions`, `orders`, `history`, `profile`, `pnl`, `arcade positions`, `arcade history`, `clans list`) take `--key <name>` or `--address <address>` (mutually exclusive) and default to the active key's wallet. See [setup](setup.md).
 
 Every write honors `--dry-run`. Transaction writes return the unsigned base64 `transaction` without signing or submitting. Signed-message writes (clans, comments, username) return the `message` the wallet would sign and submit nothing.
 
@@ -26,6 +26,7 @@ jup predictions events --limit 5 --offset 10
 - `--subcategory`, `--tags`: comma-separated IDs from `jup predictions categories`
 - `--id` takes one or more comma-separated event IDs; it cannot be combined with listing or search options
 - `--search` cannot be combined with `--filter`, `--sort`, `--category`, `--subcategory`, `--tags`, or `--offset`
+- `--limit` (default 10) and `--offset` (default 0) paginate listings; `next` is only returned for listings (not `--id` or `--search`)
 
 ```js
 // Example JSON response:
@@ -55,7 +56,7 @@ jup predictions events --limit 5 --offset 10
       ]
     }
   ],
-  "next": 10 // pagination offset for next page; omitted when no more results
+  "next": 10 // offset for the next page; omitted when no more results
 }
 ```
 
@@ -85,7 +86,7 @@ jup predictions suggested --category sports --exclude <eventId>
 }
 ```
 
-`suggested` returns the same `{ "events": [...] }` shape as `events`.
+`suggested` returns the same `{ "events": [...] }` shape as `events` (no `next`); `--limit` defaults to 5. `categories --category` errors on an unknown category.
 
 ### Market detail, price history, orderbook, and scores
 
@@ -96,7 +97,8 @@ jup predictions orderbook --market <marketId> --depth 10
 jup predictions score --event <eventId>
 ```
 
-- `orderbook` reads one snapshot from Jupiter's price WebSocket (needs Node.js 22+ or the standalone binary)
+- `price-history --limit` (default 50) keeps the most recent points
+- `orderbook` reads one snapshot from Jupiter's price WebSocket (needs Node.js 22+, Bun, or the standalone binary); `--depth` (default 10) is price levels per side, best price first
 - `score` returns `"score": null` when the event has no live sports score
 
 ```js
@@ -106,7 +108,7 @@ jup predictions score --event <eventId>
   "title": "Buffalo Bills",
   "provider": "polymarket",
   "status": "open",
-  "result": null,
+  "result": null, // "yes", "no", or "draw" when resolved
   "yesPriceUsd": 0.14, // buy prices
   "noPriceUsd": 0.87,
   "yesSellPriceUsd": 0.13, // best bids
@@ -165,7 +167,8 @@ jup predictions timed --asset spcx --interval 15m
 ```
 
 - `--asset`: `btc`, `eth`, `sol`, `xrp`, `bnb`, `doge`, `hype`, `spcx` (stock)
-- `--interval`: `5m`, `15m` (default), `1H`, `4h`, `daily`, `weekly`, `monthly`, `yearly`
+- `--interval`: `5m`, `15m` (default), `1H`, `4h`, `daily`, `weekly`, `monthly`, `yearly` (case-insensitive, as is `--asset`)
+- `--limit` (default 3) caps both `upcoming` and `recent`
 - Each event has an "Up" and a "Down" market; buy one with `jup predictions open --market <marketId> --side yes`
 
 ```js
@@ -174,7 +177,7 @@ jup predictions timed --asset spcx --interval 15m
   "asset": "btc",
   "interval": "15m",
   "priceToBeatUsd": 83457.73, // asset price when the live window opened; null if unavailable
-  "current": { /* event, same shape as in events */ },
+  "current": { /* event, same shape as in events; null when no window is live */ },
   "upcoming": [ /* events, soonest first */ ],
   "recent": [ /* events, newest first; the winning market has result "yes" */ ]
 }
@@ -252,7 +255,7 @@ jup predictions open --market <marketId> --side yes --amount 500 --slippage 700
 jup predictions open --market <marketId> --side yes --amount 10 --dry-run
 ```
 
-- `--market`: market ID from `jup predictions events`
+- `--market`: market ID from `jup predictions events`; suspended or not-yet-open markets are rejected
 - `--side`: `yes`, `no`, `y`, `n`
 - `--amount`: input token amount (human-readable)
 - `--input`: input token symbol or mint (default: `USDC`); timed stock (BisonFi) markets accept USDC only
@@ -260,7 +263,7 @@ jup predictions open --market <marketId> --side yes --amount 10 --dry-run
 - `--slippage`: accept the server's simulated slippage up to this many bps. The server quotes `slippageBps` for every order and caps it at `maxSlippageBps` (the order reverts above it). Like jup.ag's confirmation prompt, a quote of 500 bps (5%) or more is refused unless `--slippage` is at or above it; this also applies under `--dry-run`
 - Saba (`gx`) markets are bought as tickets and only support `--side yes`
 - Kalshi buys are currently disabled by the API; Kalshi positions can still be closed and claimed
-- After submitting a market order, the CLI waits up to 60 seconds for the keeper to fill it and reports `orderStatus`: `filled`, `failed`, or `pending` (still unfilled when the wait ended). Limit orders get a 15-second check, since a marketable limit can fill at once; otherwise they report `pending` and rest until filled or cancelled
+- After submitting a market order, the CLI waits up to 60 seconds for the keeper to fill it and reports `orderStatus`: `filled`, `failed`, or `pending` (still unfilled when the wait ended). Limit orders get a 15-second check, since a marketable limit can fill at once; otherwise they report `pending` and rest until filled or cancelled. Atomic-swap venues (timed stock/BisonFi) settle in the transaction and report `filled` at once with `avgFillPriceUsd: null`
 - A `failed` order (the keeper rejected it) exits non-zero; the JSON response still carries the order details plus an `error`. `pending` exits 0
 - `--dry-run` previews the order without signing, showing cost, fees, and payout. JSON response includes the unsigned base64 `transaction`
 
@@ -287,7 +290,22 @@ jup predictions open --market <marketId> --side yes --amount 10 --dry-run
   "avgFillPriceUsd": 0.65,
   "signature": "2Goj...diEc"
 }
+
+// Example JSON response (Saba ticket):
+{
+  "action": "open",
+  "marketId": "mkt456",
+  "side": "yes",
+  "orderType": "ticket",
+  "costUsd": 10.00, // stake
+  "positionPayoutUsd": 18.50, // max payout
+  "ticketPubkey": "7xKp...Qm2d",
+  "ticketStatus": "...",
+  "signature": "2Goj...diEc"
+}
 ```
+
+With `--dry-run`, JSON adds `"dryRun": true` and `transaction`, and `signature` is `null`.
 
 ### Close, claim, or cancel
 
@@ -311,10 +329,11 @@ jup predictions close --order <orderPubkey>
 jup predictions close --position <pubkey> --dry-run
 ```
 
+- Provide exactly one of `--position` or `--order`
 - The CLI auto-detects whether to sell or claim based on the market result
 - Like jup.ag, full sells ask for a floor $0.02 under the current bid (never below $0.01), but the server sets the on-chain floor itself: `minSellPriceUsd` in the response, up to `maxSlippageBps` under the bid. Check it in the `--dry-run` preview
 - `--slippage <bps>` works as on `open`: a quote of 500 bps or more, or slippage that would cost $2,000 or more of the sale, is refused unless `--slippage` is at or above `slippageBps`
-- `--contracts` rounds down to the venue's step (1 contract on Kalshi, 0.01 on Polymarket)
+- `--contracts` applies to a single `--position` only (not `--order` or `all`, and not to claims); it rounds down to the venue's step (1 contract on Kalshi, 0.01 on Polymarket) and selling at least the held amount is a full close
 - Saba (`gx`) positions can't be sold, fully or partly; hold them until the market resolves, then claim
 - Sells wait for the fill and report `orderStatus`, like `open`; a `failed` sell exits non-zero
 - `--position all` asks the server for a sell (or claim) per position, with a 5% price floor like jup.ag's Close All, and runs them in order. Table mode prints each one as it lands; sells are then checked for fills. If one fails, the rest are skipped: the response lists the completed `results`, the `failed` item and an `error`, and the command exits non-zero
@@ -391,7 +410,8 @@ jup predictions claim --position <pubkey>   # one position
 jup predictions claim --dry-run
 ```
 
-- Claims run one by one; table mode prints each as it lands. If one fails, the rest are skipped: the response lists the completed `results` plus `failed` and `error`, and the command exits non-zero
+- Claims run one by one; table mode prints each as it lands. If one fails, the rest are skipped: the response lists the completed `results` plus `failed` (`positionPubkey`, `error`) and `error`, and the command exits non-zero
+- `payoutUsd` is the total of the completed `results`. With `--dry-run`, each result carries its unsigned `transaction`
 
 ```js
 // Example JSON response:
@@ -416,6 +436,8 @@ jup predictions claim --dry-run
 jup predictions orders
 jup predictions orders --address <wallet-address> --limit 20
 ```
+
+- `--limit` defaults to 10, `--offset` to 0; use `next` for the following page
 
 ```js
 // Example JSON response:
@@ -490,9 +512,9 @@ jup predictions leaderboard --period weekly --metric pnl --limit 10
 jup predictions set-username --username <name>
 ```
 
-- `profile --period`: `all_time` (default), `24h`, `7d`, `30d`
+- `profile --period`: `all_time` (default), `24h`, `7d`, `30d`; `winRatePct` is `null` with no resolved predictions
 - `pnl --interval`: `24h`, `7d` (default), `30d`, `all`
-- `leaderboard --period`: `all_time`, `weekly` (default), `monthly`; `--metric`: `pnl` (default), `volume`, `win_rate`
+- `leaderboard --period`: `all_time`, `weekly` (default), `monthly`; `--metric`: `pnl` (default), `volume`, `win_rate`; `--limit` defaults to 10
 - `set-username` signs a message with your wallet; `--dry-run` shows the message
 
 ```js
@@ -543,6 +565,9 @@ jup predictions set-username --username <name>
 
 // Example JSON response (set-username):
 { "action": "set-username", "address": "GuP8...6dc", "username": "arcader" }
+
+// Example JSON response (set-username, --dry-run):
+{ "dryRun": true, "action": "set-username", "address": "GuP8...6dc", "username": "arcader", "message": "..." }
 ```
 
 ### Arcade (1-minute rounds)
@@ -555,7 +580,10 @@ jup predictions arcade history --address <wallet-address> --limit 20
 ```
 
 - Rounds last 60 seconds. Bets go into the next round and pay out automatically after it settles
+- `--asset`: `BTC`, `SOL` (case-insensitive). Required for `open`; `rounds` defaults to `BTC` and `positions` to both
 - `--side`: `up`, `down`, `u`, `d`; `--amount` is in USDC
+- `rounds --limit` (default 5) is the number of recent rounds; `history` takes `--limit` (default 10) and `--offset`, and returns `next` when more rounds exist
+- `open --dry-run` adds `"dryRun": true` and the unsigned `transaction`, and `signature` is `null`
 - If betting has just closed for the next round, `open` waits a few seconds and retries once
 
 ```js
@@ -580,7 +608,7 @@ jup predictions arcade history --address <wallet-address> --limit 20
     "openPriceUsd": 83445.17,
     "closePriceUsd": null
   },
-  "next": { /* round */ },
+  "next": { /* round */ }, // live and next are null when no such round exists
   "recent": [ /* rounds, newest first */ ]
 }
 
@@ -606,11 +634,11 @@ jup predictions arcade history --address <wallet-address> --limit 20
     {
       "asset": "BTC",
       "opensAt": "2026-10-01T00:18:00.000Z",
-      "outcome": "DOWN",
+      "outcome": "DOWN", // null while unresolved
       "side": "down", // up, down, or both
       "amountUsd": 1,
       "payoutUsd": 1.96,
-      "pnlUsd": 0.96,
+      "pnlUsd": 0.96, // null when unavailable
       "roundAddress": "Humpk...iShg"
     }
   ],
@@ -618,17 +646,17 @@ jup predictions arcade history --address <wallet-address> --limit 20
 }
 ```
 
-`arcade positions` returns `{ "address", "count", "positions": [{ "asset", "round": "live" | "next", "opensAt", "closesAt", "upAmountUsd", "downAmountUsd", "upPayoutUsd", "downPayoutUsd" }] }`.
+`arcade positions` returns `{ "address", "count", "positions": [{ "asset", "round": "live" | "next", "opensAt", "closesAt", "upAmountUsd", "downAmountUsd", "upPayoutUsd", "downPayoutUsd" }] }`; rounds without a bet are omitted.
 
 ### Clans
 
 ```bash
 # Read
 jup predictions clans list --search degen --limit 20
-jup predictions clans list --address <wallet-address>   # the clan this wallet is in
+jup predictions clans list --address <wallet-address>   # the clan this wallet is in (or --key <name>)
 jup predictions clans get --clan <clanId|handle>
 jup predictions clans rankings
-jup predictions clans rankings --week 2026-09-21
+jup predictions clans rankings --week 2026-09-21 --limit 10
 
 # Signed with your wallet
 jup predictions clans invites                           # invitations you received
@@ -644,6 +672,8 @@ jup predictions clans reject --clan <clanId|handle> --request <requestId>
 jup predictions clans kick --clan <clanId|handle> --member <wallet-address>
 ```
 
+- `clans list` takes `--limit` (default 20), `--offset`, and returns `next` when more clans exist; `clans rankings --limit` defaults to 20. `--clan` accepts a clan ID or handle (`@handle` also works)
+- `clans get` lists only pending `invites` and `joinRequests`
 - Clan actions are authorized by a signed message, not a transaction. With `--dry-run` they print the message and submit nothing; this includes `clans invites`, which signs a message to read your invitations
 
 ```js
@@ -696,6 +726,8 @@ jup predictions clans kick --clan <clanId|handle> --member <wallet-address>
 { "action": "join", "clanId": "707e...", "result": { /* join request from the API */ } }
 ```
 
+Write responses are `{ "action", "clanId", "result" }`; `clanId` is `null` for `create`.
+
 `clans list` returns `{ "totalClans", "totalMembers", "clans": [{ "clanId", "name", "handle", "description", "leader", "memberCount", "createdAt" }], "next" }`. `clans invites` returns `{ "address", "count", "invites": [{ "inviteId", "clanId", "clan", "handle", "invitedBy", "expiresAt" }] }`.
 
 ### Comments
@@ -704,7 +736,8 @@ jup predictions clans kick --clan <clanId|handle> --member <wallet-address>
 jup predictions comments list --event <eventId> --sort top
 jup predictions comments list --arcade
 jup predictions comments list --clan <clanId|handle>       # clan members only; signs with your key
-jup predictions comments list --subcategory nfl --cursor <cursor>
+jup predictions comments list --subcategory btc --tags 15m --cursor <cursor>
+jup predictions comments list --event <eventId> --address <wallet-address>   # mark likedByMe for this wallet
 jup predictions comments post --event <eventId> --text "Bills in 4"
 jup predictions comments post --arcade --text "gm" --reply <commentId>
 jup predictions comments like --comment <commentId>
@@ -712,8 +745,9 @@ jup predictions comments like --comment <commentId> --unlike
 jup predictions comments delete --comment <commentId>
 ```
 
-- Threads are per event subcategory (timed events add their timeframe), the arcade chat, or a clan chat
-- `--sort`: `newest` (default), `oldest`, `top`
+- Threads are per event subcategory (timed events add their timeframe), the arcade chat, or a clan chat. Pass exactly one of `--event`, `--arcade`, `--clan`, or `--subcategory` (raw thread; `--tags` is a comma-separated list for it)
+- `--sort`: `newest` (default), `oldest`, `top`; `--limit` defaults to 20
+- `likedByMe` is computed for `--address` (or the `--key` wallet); clan chat defaults to your own wallet
 - Writes and clan-chat reads use a 24-hour comment session: the first call signs one message with your wallet to authorize a session key, which then signs each request. Like jup.ag, the session key is cached per wallet in `~/.config/jup/auth/predict-comments-<wallet>.json` (mode 0600) and reused until it expires; a session the server no longer knows is replaced once
 - `--dry-run` submits nothing and never authorizes a session. It returns `sessionCached` and the wallet `message` it would sign (`null` when a cached session would be used). `comments list --clan` under `--dry-run` reads with a cached session, or prints the preview when there is none
 
@@ -738,6 +772,15 @@ jup predictions comments delete --comment <commentId>
 
 // Example JSON response (post):
 { "action": "comment", "commentId": "...", "address": "...", "text": "gm", "likes": 0, "likedByMe": false, "createdAt": "...", "replies": [] }
+
+// Example JSON response (like; "action" is "unlike" with --unlike):
+{ "action": "like", "commentId": "...", "address": "...", "text": "gm", "likes": 1, "likedByMe": true, "createdAt": "...", "replies": [] }
+
+// Example JSON response (delete):
+{ "action": "delete", "commentId": "...", "deleted": true }
+
+// Example JSON response (post, --dry-run):
+{ "dryRun": true, "action": "comment", "subcategory": "nfl", "tags": [], "text": "gm", "replyTo": null, "address": "GuP8...6dc", "sessionCached": false, "message": "..." }
 ```
 
 ## Workflows

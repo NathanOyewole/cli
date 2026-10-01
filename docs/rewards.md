@@ -14,8 +14,9 @@ jup rewards campaigns --campaign tessera
 ```
 
 - `--status`: `all` (default), `live`, `ended`. `live` lists every campaign that hasn't ended, including upcoming and claim-only ones (same as the jup.ag "Live" tab). `ongoing` is accepted as an alias for `live`.
-- `--campaign` looks up one campaign by slug or ID and adds `description`, `canClaim`, `hasLeaderboard`, `periods` (round IDs for volume-leaderboard campaigns), and the raw `reward` and `rewardsPool` objects. It can't be combined with `--status`.
-- `status` is one of `upcoming`, `ongoing`, `pending_claim`, `claim_only`, `ended`.
+- `--campaign` looks up one campaign by slug or ID and returns it as `{ "campaign": { ... } }` (not a list) with the same fields plus `description`, `canClaim`, `hasLeaderboard`, `periods` (round IDs for volume-leaderboard campaigns), and the raw `reward` and `rewardsPool` objects. It can't be combined with `--status`.
+- `status` is one of `upcoming`, `ongoing`, `pending_claim`, `claim_only`, `ended`. A campaign whose reward pool is used up also shows as `ended`.
+- `template` is the jup.ag UI template and can differ from `rewardType` (for example a `lootbox` reward shown with the `trading` or `lend-deposit` template)
 - `rewardType` `redirect` campaigns link elsewhere (`redirectUrl`) and have no progress, leaderboard or claim.
 
 ```js
@@ -55,7 +56,8 @@ jup rewards leaderboard --campaign european-final --limit 5
   - `earnings` (lootbox, retroactive, raffle): `entries` of `{ rank, address, openedBoxes, earningsUsd }` for lootbox, `{ rank, address, amount }` for retroactive (token amount), `{ rank, address, amount, numEntries }` for raffles.
   - `volume` (volume-leaderboard): one round at a time; `--period` picks the round (defaults to the current one, else the first). `periods` lists the round IDs, including the overall one. `entries` are `{ rank, address, points, multiplier, prize }`, with `prize` in the reward token (`rewardMint`).
   - `teams` (team trading competitions): `teams[]` of `{ name, mint, entries: [{ rank, address, volumeUsd }] }` plus the `bonus` raffle.
-- `--limit` caps entries per list (default 10).
+- `--limit` caps entries per list (default 10). `--period` is only valid for volume-leaderboard campaigns, and `redirect` campaigns have no leaderboard.
+- Every response has `campaign` and `kind`. `earnings` also has `rewardType`, `rewardMint`, `entries` and, when the API reports it, `totalEntries`; `teams` has `teams` and `bonus` (`{ minVolumeUsd, prizePoolUsd, winnerCount }` or `null`).
 
 ```js
 // Example JSON response (volume):
@@ -85,7 +87,8 @@ jup rewards progress --campaign tessera --address <wallet-address>
 
 - With no options, uses the active key's wallet. `--key` and `--address` are mutually exclusive.
 - `claimable` is true when the campaign is in its claim window (see [claim](#claim-rewards)) and the wallet has unopened cards or an unclaimed amount.
-- Fields depend on `rewardType`: lootbox campaigns report `openedBoxes`, `unopenedBoxes`, `progressPct` (toward the next card), `threshold` and `earningsUsd`; token campaigns report `unclaimedAmount` and `claimedAmount` (token amounts); volume-leaderboard campaigns add per-round `stats`.
+- Fields depend on `rewardType`: lootbox campaigns report `openedBoxes`, `unopenedBoxes`, `progressPct` (toward the next card), `threshold` and `earningsUsd`; token campaigns report `unclaimedAmount` and `claimedAmount` (token amounts); volume-leaderboard campaigns add per-round `stats` of `{ id, startTime, endTime, rank, points, multiplier, prize }`. Raffle campaigns add `numEntries`.
+- Beyond `campaign`, `address`, `status`, `claimable` and `rewardMint`, the remaining fields are passed through from the Rewards API, so a campaign may include extras such as `eligibleBalance` or `hasCompletedAcademy`
 
 ```js
 // Example JSON response (lootbox):
@@ -146,11 +149,11 @@ jup rewards claim --campaign <slug> --boxes 5
 jup rewards claim --campaign <slug> --key mykey
 ```
 
-- Claims the full unclaimed amount for token campaigns. For lootbox campaigns it reveals mystery cards: `--boxes` sets how many (defaults to all unopened).
+- Claims the full unclaimed amount for token campaigns (fails with "Nothing to claim" if there is none). For lootbox campaigns it reveals mystery cards: `--boxes` sets how many (a positive integer, at most the unopened count; defaults to all unopened). `--boxes` is rejected for non-lootbox campaigns.
 - Fails unless the campaign is in its claim window, like jup.ag: a campaign whose reward pool is used up still lets you claim what you earned, and fixed campaigns with no `claimEndsAt` stay claimable once claiming starts.
 - Campaigns whose `reward.onlyClaimableThroughJup` is true can only be claimed from a Jupiter wallet, so the CLI refuses and points to the campaign page on jup.ag.
 - The server builds the transaction; the CLI signs it and the server broadcasts it.
-- `--dry-run` returns the unsigned `transaction` without signing or submitting.
+- `--dry-run` adds `dryRun: true` and the unsigned `transaction`, without signing or submitting; `signature`, `valueUsd` and `claimed` are null.
 
 ```js
 // Example JSON response:
@@ -178,7 +181,8 @@ jup rewards apply --project "My Project" --token <mint> --contact-method email -
 ```
 
 - `--contact-method`: `twitter`, `telegram`, `email`, `discord`. Handles can't be URLs; emails must be valid.
-- `--dry-run` validates and prints the application without sending it.
+- `--project` is 1-120 characters, `--token` a valid Solana mint address, `--contact` 1-128 characters, and `--goals` (optional) at most 2000. `--contact-method` is case-insensitive.
+- `--dry-run` validates and prints the application without sending it: `submitted` is `false` and `dryRun: true` is added. `campaignGoals` is omitted when `--goals` is not given.
 
 ```js
 // Example JSON response:
