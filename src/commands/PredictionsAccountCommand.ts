@@ -182,7 +182,10 @@ export class PredictionsAccountCommand {
       results.push({
         positionPubkey: req.position.positionPubkey,
         side: req.position.isYes ? "yes" : "no",
-        contracts: Number(req.position.contracts),
+        contracts: PredictionsFormat.contracts(
+          req.position.contractsMicro,
+          req.position.contracts
+        ),
         payoutUsd: NumberConverter.fromMicroUsd(req.position.payoutAmountUsd),
         signature,
         ...(Config.dryRun && { transaction: req.transaction }),

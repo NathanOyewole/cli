@@ -142,9 +142,10 @@ export class PredictionsExecution {
     if (filled) {
       return {
         orderStatus: "filled",
-        filledContracts: filled.filledContractsMicro
-          ? NumberConverter.fromMicroUsd(filled.filledContractsMicro)
-          : Number(filled.filledContracts),
+        filledContracts: PredictionsFormat.contracts(
+          filled.filledContractsMicro,
+          filled.filledContracts
+        ),
         avgFillPriceUsd: NumberConverter.fromMicroUsd(filled.avgFillPriceUsd),
       };
     }

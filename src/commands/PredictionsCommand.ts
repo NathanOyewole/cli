@@ -263,7 +263,7 @@ export class PredictionsCommand {
       event: p.eventMetadata.title,
       market: p.marketMetadata.title,
       side: p.isYes ? "yes" : "no",
-      contracts: Number(p.contracts),
+      contracts: PredictionsFormat.contracts(p.contractsMicro, p.contracts),
       costUsd: NumberConverter.fromMicroUsd(p.totalCostUsd),
       valueUsd: NumberConverter.fromMicroUsd(p.valueUsd ?? 0),
       pnlUsd: NumberConverter.fromMicroUsd(p.pnlUsd ?? 0),
@@ -603,7 +603,10 @@ export class PredictionsCommand {
       type: h.eventType,
       side: h.isYes ? "yes" : "no",
       action: h.isBuy ? "buy" : "sell",
-      contracts: Number(h.filledContracts),
+      contracts: PredictionsFormat.contracts(
+        h.filledContractsMicro,
+        h.filledContracts
+      ),
       avgPriceUsd: NumberConverter.fromMicroUsd(h.avgFillPriceUsd),
       pnlUsd: h.realizedPnl
         ? NumberConverter.fromMicroUsd(h.realizedPnl)
@@ -830,7 +833,10 @@ export class PredictionsCommand {
     );
     const result = await PredictionsExecution.signAndExecute(signer, res);
 
-    const contracts = Number(res.position.contracts);
+    const contracts = PredictionsFormat.contracts(
+      res.position.contractsMicro,
+      res.position.contracts
+    );
     const payoutUsd = NumberConverter.fromMicroUsd(
       res.position.payoutAmountUsd
     );

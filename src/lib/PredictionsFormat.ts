@@ -91,6 +91,14 @@ export class PredictionsFormat {
     return NumberConverter.fromMicroUsd(value);
   }
 
+  /** The API's `contracts` is truncated to whole contracts; the micro field keeps the fraction. */
+  public static contracts(
+    micro: string | null | undefined,
+    whole: string
+  ): number {
+    return micro ? NumberConverter.fromMicroUsd(micro) : Number(whole);
+  }
+
   public static formatPricePct(price: number | null): string {
     if (price === null || price === undefined) {
       return chalk.gray("—");

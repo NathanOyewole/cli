@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { PredictionEvent } from "../clients/PredictionsClient.ts";
 import type { ArcadeRound } from "../clients/PredictionsArcadeClient.ts";
 import { PredictionsExecution } from "../lib/PredictionsExecution.ts";
+import { PredictionsFormat } from "../lib/PredictionsFormat.ts";
 import { PredictionsArcadeCommand } from "./PredictionsArcadeCommand.ts";
 import { PredictionsCommand } from "./PredictionsCommand.ts";
 import { PredictionsCommunityCommand } from "./PredictionsCommunityCommand.ts";
@@ -61,6 +62,17 @@ describe("claimable", () => {
         marketMetadata: { result: "no" },
       })
     ).toBe(true);
+  });
+});
+
+describe("contracts", () => {
+  test("keep the fraction the whole-contract field truncates", () => {
+    expect(PredictionsFormat.contracts("660000", "0")).toBe(0.66);
+    expect(PredictionsFormat.contracts("50410000", "50")).toBe(50.41);
+  });
+
+  test("fall back to whole contracts without a micro field", () => {
+    expect(PredictionsFormat.contracts(undefined, "12")).toBe(12);
   });
 });
 
