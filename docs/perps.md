@@ -231,7 +231,7 @@ jup perps set --position <pubkey> --tp 100 --sl 70 --dry-run
 ```
 
 - Get the `positionPubkey` or `orderPubkey` from `jup perps positions`
-- Without `--size`, `--tp`/`--sl` update the whole-position TP/SL if one exists, otherwise create it. With `--size`, a new partial TP/SL is always created; a position can hold several, up to a server limit (the error says how many).
+- Without `--size`, `--tp`/`--sl` update the whole-position TP/SL if one exists, otherwise create it. With `--size`, a new partial TP/SL is always created; a position can hold several, up to a server limit (the error says how many). `--size` can't exceed the position size; 99% or more of it closes the whole position size, as on the web.
 - `--add-collateral` and `--remove-collateral` keep the position size unchanged. `--input`/`--receive` default to the position's collateral token. Amounts outside the server's per-position limits are rejected with the allowed range.
 - A limit order's size cannot be edited (the web app doesn't allow it either): cancel and re-open instead.
 - `--dry-run` previews the update without signing. JSON response includes the unsigned base64 `transaction` for each update.

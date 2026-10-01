@@ -677,6 +677,9 @@ export class PerpsCommand {
       });
     }
 
+    const partialSize = opts.size
+      ? PerpsTx.partialTpslSize(opts.size, position.sizeUsd)
+      : undefined;
     const results: {
       type: string;
       action: string;
@@ -734,9 +737,7 @@ export class PerpsCommand {
               triggerPrice: NumberConverter.toMicroUsd(price),
               requestType: type,
               entirePosition: !opts.size,
-              sizeUsdDelta: opts.size
-                ? NumberConverter.toMicroUsd(opts.size)
-                : undefined,
+              sizeUsdDelta: partialSize,
             },
           ],
         }).catch(this.explainTpslLimit);
@@ -749,7 +750,9 @@ export class PerpsCommand {
           type,
           action: "created",
           triggerPriceUsd: Number(price),
-          sizeUsd: opts.size ? Number(opts.size) : null,
+          sizeUsd: partialSize
+            ? NumberConverter.fromMicroUsd(partialSize)
+            : null,
           signature: result.txid,
           ...(Config.dryRun && {
             transaction: res.serializedTxBase64,

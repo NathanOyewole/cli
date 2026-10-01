@@ -54,3 +54,26 @@ describe("PerpsTx.submit", () => {
     ).rejects.toThrow("Request failed with status code 400");
   });
 });
+
+describe("PerpsTx.partialTpslSize", () => {
+  const positionSize = "100000000"; // $100
+
+  test("converts a size within the position to micro-USD", () => {
+    expect(PerpsTx.partialTpslSize("25.5", positionSize)).toBe("25500000");
+  });
+
+  test("closes the whole size from 99% of the position", () => {
+    expect(PerpsTx.partialTpslSize("98.99", positionSize)).toBe("98990000");
+    expect(PerpsTx.partialTpslSize("99", positionSize)).toBe("100000000");
+    expect(PerpsTx.partialTpslSize("100", positionSize)).toBe("100000000");
+  });
+
+  test("rejects a size above the position or one that rounds to zero", () => {
+    expect(() => PerpsTx.partialTpslSize("100.01", positionSize)).toThrow(
+      "--size can't exceed the position size of $100."
+    );
+    expect(() => PerpsTx.partialTpslSize("0.0000001", positionSize)).toThrow(
+      "--size must be at least $0.000001."
+    );
+  });
+});

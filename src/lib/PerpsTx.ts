@@ -8,6 +8,7 @@ import { HTTPError } from "ky";
 
 import { PerpsClient } from "../clients/PerpsClient.ts";
 import { Config } from "./Config.ts";
+import { NumberConverter } from "./NumberConverter.ts";
 import { Rpc } from "./Rpc.ts";
 import { Signer } from "./Signer.ts";
 
@@ -103,6 +104,27 @@ export class PerpsTx {
       opts.address ??
       (await Signer.loadAddress(opts.key ?? Config.load().activeKey))
     );
+  }
+
+  // Partial TP/SL size in micro-USD. As in the web form, a size above the
+  // position is rejected and one within 1% of it closes the whole size.
+  public static partialTpslSize(
+    sizeUsd: string,
+    positionSizeMicroUsd: string
+  ): string {
+    const size = BigInt(NumberConverter.toMicroUsd(sizeUsd) || "0");
+    const positionSize = BigInt(positionSizeMicroUsd);
+    if (size === 0n) {
+      throw new Error("--size must be at least $0.000001.");
+    }
+    if (size > positionSize) {
+      throw new Error(
+        `--size can't exceed the position size of $${NumberConverter.fromMicroUsd(positionSizeMicroUsd)}.`
+      );
+    }
+    return size * 100n >= positionSize * 99n
+      ? positionSize.toString()
+      : size.toString();
   }
 
   public static normalizeSide(side: string): "long" | "short" {
