@@ -19,7 +19,9 @@ import { Signer } from "../lib/Signer.ts";
 import { Swap } from "../lib/Swap.ts";
 import {
   DEFAULT_EXPIRY,
+  DRY_RUN_CANCEL_NOTE,
   LIMIT_INTENTS,
+  assertIntentPair,
   assertMinOrderUsd,
   buildPriceOrderParams,
   getTriggerSide,
@@ -184,6 +186,7 @@ export class SpotLimitCommand {
     if (inputToken.id === outputToken.id) {
       throw new Error("--from and --to must be different tokens.");
     }
+    assertIntentPair(intent, inputToken.id, outputToken.id);
     const triggerToken =
       getTriggerSide(intent) === "input" ? inputToken : outputToken;
     const target = (
@@ -590,10 +593,13 @@ export class SpotLimitCommand {
       order.inputMint,
       order.remainingInputAmount
     );
-    const cancel = await TriggerClient.cancelOrder(signer, "price", order.id);
 
+    // Requesting the cancel transaction already moves the order to
+    // ready_to_cancel server-side, which stops it from filling, so a dry run
+    // must not request it.
     let signature: string | null = null;
     if (!Config.dryRun) {
+      const cancel = await TriggerClient.cancelOrder(signer, "price", order.id);
       const signedTx = await signer.signTransaction(
         cancel.transaction as Base64EncodedBytes
       );
@@ -610,21 +616,24 @@ export class SpotLimitCommand {
       Output.json({
         ...(Config.dryRun && { dryRun: true }),
         orderId: order.id,
+        state: order.orderState,
         inputToken: tokens.ref(order.inputMint),
         remainingInAmount,
         signature,
-        ...(Config.dryRun && { transaction: cancel.transaction }),
+        ...(Config.dryRun && { transaction: null }),
       });
       return;
     }
 
     if (Config.dryRun) {
       console.log(Output.DRY_RUN_LABEL);
+      console.log(DRY_RUN_CANCEL_NOTE);
     }
     Output.table({
       type: "vertical",
       rows: [
         { label: "Order ID", value: order.id },
+        { label: "State", value: order.orderState },
         {
           label: "Withdraw",
           value: `${remainingInAmount ?? "?"} ${tokens.symbol(order.inputMint)}`,
@@ -662,7 +671,15 @@ export class SpotLimitCommand {
           signedTransaction: signedTx,
           requestId,
         });
-        signatures.push(res.signature);
+        if (res.status === "Failed") {
+          const landed = signatures.length
+            ? ` Already landed: ${signatures.join(", ")}.`
+            : "";
+          throw new Error(
+            `Cancel transaction failed: ${res.error ?? `code ${res.code}`} (signature ${res.signature ?? Signer.signatureOf(signedTx)}).${landed}`
+          );
+        }
+        signatures.push(res.signature ?? Signer.signatureOf(signedTx));
       }
     }
 

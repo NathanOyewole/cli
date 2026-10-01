@@ -18,7 +18,12 @@ import { Config } from "../lib/Config.ts";
 import { NumberConverter } from "../lib/NumberConverter.ts";
 import { Output } from "../lib/Output.ts";
 import { Signer } from "../lib/Signer.ts";
-import { Swap, type SwapSettingsOpts, type TokenWarning } from "../lib/Swap.ts";
+import {
+  Swap,
+  type SwapResult,
+  type SwapSettingsOpts,
+  type TokenWarning,
+} from "../lib/Swap.ts";
 import { SpotDcaCommand } from "./SpotDcaCommand.ts";
 import { SpotLimitCommand } from "./SpotLimitCommand.ts";
 import { SpotDiscoveryCommand } from "./SpotDiscoveryCommand.ts";
@@ -320,8 +325,12 @@ export class SpotCommand {
       DatapiClient.resolveToken(opts.to),
     ]);
 
-    const [swap, warnings] = await Promise.all([
-      Swap.execute({
+    // Fetched before signing so the warnings are known when the user signs and
+    // are still reported if the swap fails.
+    const warnings = await Swap.getTokenWarnings([inputToken, outputToken]);
+    let swap: SwapResult;
+    try {
+      swap = await Swap.execute({
         signer,
         inputToken,
         outputToken,
@@ -329,9 +338,15 @@ export class SpotCommand {
         rawAmount: opts.rawAmount,
         slippageBps: opts.slippage,
         settings: swapSettings,
-      }),
-      Swap.getTokenWarnings([inputToken, outputToken]),
-    ]);
+      });
+    } catch (err) {
+      if (!warnings?.length) {
+        throw err;
+      }
+      throw new Error(
+        `${await Output.errorMessage(err)} Token warnings: ${warnings.map((w) => `${w.token.symbol}: ${w.message}`).join("; ")}`
+      );
+    }
 
     const networkFee = NumberConverter.fromChainAmount(
       swap.networkFeeLamports.toString(),
@@ -342,7 +357,7 @@ export class SpotCommand {
       Output.json({
         ...(Config.dryRun && { dryRun: true }),
         trader: signer.address,
-        signature: swap.result?.signature ?? null,
+        signature: swap.signature,
         inputToken: {
           id: inputToken.id,
           symbol: inputToken.symbol,
@@ -390,8 +405,8 @@ export class SpotCommand {
           value: `${networkFee} SOL`,
         },
         ...this.warningRows(warnings),
-        ...(!Config.dryRun
-          ? [{ label: "Tx Signature", value: swap.result!.signature }]
+        ...(swap.signature
+          ? [{ label: "Tx Signature", value: swap.signature }]
           : []),
       ],
     });
@@ -636,6 +651,8 @@ export class SpotCommand {
       requestId: txResponse.requestId,
       signedTransaction: signedTx,
     });
+    Swap.assertExecuted(result);
+    const signature = result.signature ?? Signer.signatureOf(signedTx);
 
     if (Output.isJson()) {
       Output.json({
@@ -649,7 +666,7 @@ export class SpotCommand {
         amount: humanAmount,
         value: value,
         networkFeeLamports: txResponse.feeAmount,
-        signature: result.signature,
+        signature,
       });
       return;
     }
@@ -667,7 +684,7 @@ export class SpotCommand {
           label: "Network Fee",
           value: `${networkFee} SOL`,
         },
-        { label: "Tx Signature", value: result.signature },
+        { label: "Tx Signature", value: signature },
       ],
     });
   }

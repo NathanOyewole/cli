@@ -1,5 +1,7 @@
 import { ClientConfig } from "./ClientConfig.ts";
 
+const EXECUTE_TIMEOUT_MS = 90_000;
+
 export type CraftInviteResponse = {
   inviteSignerAddress: string;
   mint: string;
@@ -28,7 +30,7 @@ export type CraftInviteTxResponse = {
 };
 
 export type ExecuteInviteResponse = {
-  signature: string;
+  signature?: string | null;
   status: "pending" | "confirmed" | "failed" | "Success" | "Failed";
   code?: number;
   error?: string;
@@ -103,7 +105,10 @@ export class InviteClient {
     signedTransaction: string;
     requestId: string;
   }): Promise<ExecuteInviteResponse> {
-    return this.#ky.post("execute", { json: req }).json();
+    // The API co-signs, broadcasts and waits for confirmation before replying.
+    return this.#ky
+      .post("execute", { json: req, timeout: EXECUTE_TIMEOUT_MS })
+      .json();
   }
 
   /** Returns null when the invite does not exist (the API answers 200 with an error). */

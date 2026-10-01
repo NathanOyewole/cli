@@ -3,6 +3,7 @@ import {
   createSignableMessage,
   getBase64Codec,
   getBase64EncodedWireTransaction,
+  getSignatureFromTransaction,
   getTransactionCodec,
   partiallySignTransactionWithSigners,
   type Base64EncodedBytes,
@@ -89,6 +90,14 @@ export class Signer {
     }
     const keyPath = join(Config.KEYS_DIR, `${name}.json`);
     writeFileSync(keyPath, this.#keyPair.toJson());
+  }
+
+  // A transaction's id is its fee payer's signature, so it is known before
+  // submission and can be reported even when the submit call fails.
+  public static signatureOf(signedTx: Base64EncodedWireTransaction): string {
+    return getSignatureFromTransaction(
+      getTransactionCodec().decode(getBase64Codec().encode(signedTx))
+    );
   }
 
   public get address(): string {

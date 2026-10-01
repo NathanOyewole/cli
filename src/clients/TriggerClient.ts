@@ -242,6 +242,15 @@ type V1Page<T> = { orders: T[]; totalPages: number; totalItems: number };
 
 export type V1List<T> = { orders: T[]; total: number };
 
+// Trigger V1 reports a transaction that failed to land as HTTP 200 with
+// status "Failed".
+export type V1ExecuteResponse = {
+  status: "Success" | "Failed";
+  code: number;
+  signature?: string | null | undefined;
+  error?: string | null | undefined;
+};
+
 export class TriggerClient {
   static readonly #ky = ClientConfig.ky.extend({
     prefixUrl: "https://trigger-api.jup.ag/v2",
@@ -424,7 +433,7 @@ export class TriggerClient {
   public static async postV1Execute(req: {
     signedTransaction: string;
     requestId: string;
-  }): Promise<{ signature: string }> {
+  }): Promise<V1ExecuteResponse> {
     return this.#v1Ky.post("execute", { json: req }).json();
   }
 

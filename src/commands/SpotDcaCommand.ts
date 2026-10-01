@@ -5,6 +5,7 @@ import type { Command } from "commander";
 import { DatapiClient } from "../clients/DatapiClient.ts";
 import {
   TriggerClient,
+  type CancelOrderResponse,
   type DcaOrder,
   type V1DcaOrder,
 } from "../clients/TriggerClient.ts";
@@ -18,6 +19,7 @@ import { Rpc } from "../lib/Rpc.ts";
 import { Signer } from "../lib/Signer.ts";
 import { Swap } from "../lib/Swap.ts";
 import {
+  DRY_RUN_CANCEL_NOTE,
   assertMinDcaOrderUsd,
   buildDcaOrderParams,
   parseInterval,
@@ -368,14 +370,13 @@ export class SpotDcaCommand {
     }
     const order = await TriggerClient.getDcaOrder(signer, opts.order);
     const tokens = await OrderTokens.load([order.inputMint]);
-    const cancel = await TriggerClient.cancelOrder(signer, "dca", order.id);
-    const refundAmount = tokens.uiAmount(
-      order.inputMint,
-      cancel.refundAmount ?? order.inputAmountRemaining
-    );
 
+    // Requesting the cancel transaction already starts the cancel server-side,
+    // which stops further fills, so a dry run must not request it.
+    let cancel: CancelOrderResponse | null = null;
     let signature: string | null = null;
     if (!Config.dryRun) {
+      cancel = await TriggerClient.cancelOrder(signer, "dca", order.id);
       const signedTx = await signer.signTransaction(
         cancel.transaction as Base64EncodedBytes
       );
@@ -387,27 +388,37 @@ export class SpotDcaCommand {
       );
       signature = res.txSignature;
     }
+    const refundAmount = tokens.uiAmount(
+      order.inputMint,
+      cancel?.refundAmount ?? order.inputAmountRemaining
+    );
+    const ordersRemaining =
+      cancel?.roundsRemaining ??
+      Math.max(order.numberOfRounds - order.roundsFilled, 0);
 
     if (Output.isJson()) {
       Output.json({
         ...(Config.dryRun && { dryRun: true }),
         orderId: order.id,
+        state: order.displayState,
         inputToken: tokens.ref(order.inputMint),
         remainingInAmount: refundAmount,
-        ordersRemaining: cancel.roundsRemaining ?? null,
+        ordersRemaining,
         signature,
-        ...(Config.dryRun && { transaction: cancel.transaction }),
+        ...(Config.dryRun && { transaction: null }),
       });
       return;
     }
 
     if (Config.dryRun) {
       console.log(Output.DRY_RUN_LABEL);
+      console.log(DRY_RUN_CANCEL_NOTE);
     }
     Output.table({
       type: "vertical",
       rows: [
         { label: "Order ID", value: order.id },
+        { label: "State", value: order.displayState },
         {
           label: "Withdraw",
           value: `${refundAmount ?? "?"} ${tokens.symbol(order.inputMint)}`,

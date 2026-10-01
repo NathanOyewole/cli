@@ -75,6 +75,56 @@ describe("RewardsCampaign.canClaim", () => {
     expect(RewardsCampaign.canClaim(c, at("2026-01-27T00:00:00Z"))).toBe(true);
     expect(RewardsCampaign.canClaim(c, at("2026-02-01T00:00:00Z"))).toBe(false);
   });
+
+  test("still allows claims when the pool is exhausted", () => {
+    const c = campaign({
+      rewardsPool: {
+        assetId: "JUP",
+        totalPoolUsd: 100,
+        totalPoolTokenAmount: 100,
+        totalClaimedUsd: 100,
+        totalClaimedTokenAmount: 100,
+        remainingPoolUsd: 0,
+        remainingPoolTokenAmount: 0,
+      },
+    });
+    expect(RewardsCampaign.status(c, at("2026-01-27T00:00:00Z"))).toBe("ended");
+    expect(RewardsCampaign.canClaim(c, at("2026-01-27T00:00:00Z"))).toBe(true);
+  });
+
+  test("keeps fixed campaigns without a claim end claimable", () => {
+    const fixed = campaign({
+      reward: { type: "fixed", assetId: "JUP" },
+      claimEndsAt: null,
+    });
+    expect(RewardsCampaign.canClaim(fixed, at("2026-01-22T00:00:00Z"))).toBe(
+      false
+    );
+    expect(RewardsCampaign.canClaim(fixed, at("2026-01-27T00:00:00Z"))).toBe(
+      true
+    );
+    expect(RewardsCampaign.canClaim(fixed, at("2027-01-01T00:00:00Z"))).toBe(
+      true
+    );
+
+    const other = campaign({ claimEndsAt: null });
+    expect(RewardsCampaign.canClaim(other, at("2026-01-27T00:00:00Z"))).toBe(
+      false
+    );
+  });
+});
+
+describe("RewardsCampaign.requiresJupiterWallet", () => {
+  test("reads the reward's onlyClaimableThroughJup flag", () => {
+    expect(
+      RewardsCampaign.requiresJupiterWallet(
+        campaign({
+          reward: { type: "token", onlyClaimableThroughJup: true },
+        })
+      )
+    ).toBe(true);
+    expect(RewardsCampaign.requiresJupiterWallet(campaign())).toBe(false);
+  });
 });
 
 describe("RewardsCampaign status filter", () => {

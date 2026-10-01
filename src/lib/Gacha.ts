@@ -24,7 +24,51 @@ export const MARKETPLACE_SORTS: Record<string, string> = {
   oldest: "dateAsc",
 };
 
+// Where `gacha open` stopped: "buy" failed before anything was paid,
+// "submit" failed after signing (payment unknown), "open" failed after the
+// pack was paid for or the gifted pack was used.
+export type OpenFailure = {
+  stage: "buy" | "submit" | "open";
+  memo: string | null;
+  signature: string | null;
+  error: string;
+  packsLeft: number;
+  gifted: boolean;
+};
+
 export class Gacha {
+  public static retryOpenCommand(
+    packCode: string,
+    failure: OpenFailure
+  ): string | null {
+    return failure.memo && failure.stage !== "buy"
+      ? `jup gacha open --pack ${packCode} --memo ${failure.memo}`
+      : null;
+  }
+
+  public static describeOpenFailure(
+    packCode: string,
+    failure: OpenFailure
+  ): string {
+    const { memo, signature, gifted, packsLeft } = failure;
+    const error = failure.error.replace(/\.?$/, ".");
+    const retry = this.retryOpenCommand(packCode, failure);
+    let message: string;
+    if (failure.stage === "open") {
+      message = `${gifted ? "Gifted pack" : "Pack"} ${memo} is ${gifted ? "used" : "paid"}${signature ? ` (signature ${signature})` : ""} but opening it failed: ${error} Open it with \`${retry}\`.`;
+    } else if (failure.stage === "submit") {
+      message = `Submitting pack ${memo} failed: ${error} Transaction ${signature} may still land; check it before retrying, and if it landed open the pack with \`${retry}\`.`;
+    } else {
+      message = `${gifted ? "Opening the next gifted pack" : "Buying the next pack"} failed: ${error}`;
+    }
+    if (packsLeft === 0) {
+      return message;
+    }
+    return gifted
+      ? `${message} ${packsLeft} more gifted pack(s) were not opened; open them with \`jup gacha open --pack ${packCode} --gifted --quantity ${packsLeft}\`.`
+      : `${message} ${packsLeft} more pack(s) were not bought, so rerunning with --quantity ${packsLeft} is safe.`;
+  }
+
   public static packSummary(m: Machine) {
     return {
       pack: m.code,
@@ -93,7 +137,9 @@ export class Gacha {
       return c;
     }
     // Magic Eden listings omit the currency and are priced in SOL.
-    return marketplace === "ME" || marketplace === "MAGIC_EDEN"
+    return marketplace === "ME" ||
+      marketplace === "MAGIC_EDEN" ||
+      marketplace === "MAGICEDEN"
       ? "SOL"
       : "USDC";
   }

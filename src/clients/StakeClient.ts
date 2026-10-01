@@ -94,7 +94,10 @@ export type DelayedUnstakeOrder = Omit<LiquidOrder, "outAmt"> & {
   outAmt: { amtStaked: string; amtUnstaked: string };
 };
 
-export type LiquidExecuteResponse = { signature: string; status: string };
+export type LiquidExecuteResponse = {
+  signature?: string | null;
+  status?: string | null;
+};
 
 export class StakeClient {
   // The stake API is only served on api.jup.ag (lite-api returns 404), with or

@@ -19,6 +19,8 @@ export type CampaignStatusFilter = "all" | "live" | "ended";
 const CLAIM_CLOSED_SLUGS = new Set(["asr-2026-q2"]);
 
 export class RewardsCampaign {
+  // jup.ag's display status: a closed claim vault or an exhausted pool shows
+  // as ended.
   public static status(campaign: Campaign, now = new Date()): CampaignStatus {
     if (
       CLAIM_CLOSED_SLUGS.has(campaign.slug) ||
@@ -26,35 +28,35 @@ export class RewardsCampaign {
     ) {
       return "ended";
     }
-    if (now < new Date(campaign.startsAt)) {
-      return "upcoming";
-    }
-    if (now <= new Date(campaign.endsAt)) {
-      return "ongoing";
-    }
-    const claimStartsAt = campaign.claimStartsAt
-      ? new Date(campaign.claimStartsAt)
-      : undefined;
-    const claimEndsAt = campaign.claimEndsAt
-      ? new Date(campaign.claimEndsAt)
-      : undefined;
-    if (claimStartsAt && now < claimStartsAt) {
-      return "pending_claim";
-    }
-    if (!claimEndsAt) {
-      return "pending_claim";
-    }
-    return now <= claimEndsAt ? "claim_only" : "ended";
+    return this.scheduleStatus(campaign, now);
   }
 
+  // Mirrors jup.ag's canClaimRewards, which ignores pool exhaustion: a user can
+  // still claim rewards allocated before the pool ran out. Fixed campaigns
+  // without a claim end date stay claimable once claiming has started.
   public static canClaim(campaign: Campaign, now = new Date()): boolean {
     if (CLAIM_CLOSED_SLUGS.has(campaign.slug)) {
       return false;
     }
-    const status = this.status(campaign, now);
     const claimStarted =
       !campaign.claimStartsAt || now >= new Date(campaign.claimStartsAt);
-    return claimStarted && (status === "ongoing" || status === "claim_only");
+    if (!claimStarted) {
+      return false;
+    }
+    const status = this.scheduleStatus(campaign, now);
+    if (status === "ongoing" || status === "claim_only") {
+      return true;
+    }
+    return (
+      campaign.reward.type === "fixed" &&
+      !campaign.claimEndsAt &&
+      now >= new Date(campaign.startsAt)
+    );
+  }
+
+  // Campaigns flagged by jup.ag as claimable only from a Jupiter wallet.
+  public static requiresJupiterWallet(campaign: Campaign): boolean {
+    return campaign.reward.onlyClaimableThroughJup === true;
   }
 
   public static parseStatusFilter(value: string): CampaignStatusFilter {
@@ -159,6 +161,28 @@ export class RewardsCampaign {
       contactValue,
       ...(campaignGoals && { campaignGoals }),
     };
+  }
+
+  private static scheduleStatus(campaign: Campaign, now: Date): CampaignStatus {
+    if (now < new Date(campaign.startsAt)) {
+      return "upcoming";
+    }
+    if (now <= new Date(campaign.endsAt)) {
+      return "ongoing";
+    }
+    const claimStartsAt = campaign.claimStartsAt
+      ? new Date(campaign.claimStartsAt)
+      : undefined;
+    const claimEndsAt = campaign.claimEndsAt
+      ? new Date(campaign.claimEndsAt)
+      : undefined;
+    if (claimStartsAt && now < claimStartsAt) {
+      return "pending_claim";
+    }
+    if (!claimEndsAt) {
+      return "pending_claim";
+    }
+    return now <= claimEndsAt ? "claim_only" : "ended";
   }
 
   private static isPoolExhausted(campaign: Campaign): boolean {

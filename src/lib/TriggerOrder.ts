@@ -19,6 +19,8 @@ export const MIN_ORDER_USD = 10;
 // The web app validates DCA orders against 9.8 to tolerate price drift.
 const MIN_DCA_ORDER_VALIDATION_USD = 9.8;
 export const DEFAULT_EXPIRY = "7d";
+export const DRY_RUN_CANCEL_NOTE =
+  "No transaction built: the cancel transaction only exists once the cancel starts, which stops the order from filling.";
 
 const MAX_EXPIRY_SECONDS = 10 * 365 * 86_400;
 const MIN_INTERVAL_SECONDS = 60;
@@ -96,6 +98,73 @@ export function getTriggerSide(intent: LimitIntent): "input" | "output" {
   return intent === "buy-dip" || intent === "buy-pump" || intent === "otoco"
     ? "output"
     : "input";
+}
+
+const SOL_MINT = "So11111111111111111111111111111111111111112";
+const STABLE_MINTS = new Set([
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+]);
+const BASE_MINTS = new Set([...STABLE_MINTS, SOL_MINT]);
+
+// jup.ag's trade side for a pair: paying with USDC, USDT or SOL is a buy and
+// receiving one of them is a sell (SOL into a stablecoin is a sell); any other
+// pair counts as a buy.
+export function getTradeSide(
+  inputMint: string,
+  outputMint: string
+): "buy" | "sell" {
+  const inputBase = BASE_MINTS.has(inputMint);
+  const outputBase = BASE_MINTS.has(outputMint);
+  if (inputBase && outputBase) {
+    return inputMint === SOL_MINT ? "sell" : "buy";
+  }
+  return !inputBase && outputBase ? "sell" : "buy";
+}
+
+function supportsIntent(
+  intent: "oco" | "otoco",
+  inputMint: string,
+  outputMint: string
+): boolean {
+  const side = getTradeSide(inputMint, outputMint);
+  return intent === "oco"
+    ? side === "sell"
+    : side === "buy" && BASE_MINTS.has(inputMint);
+}
+
+// Mirrors jup.ag's pair orientation rules: OCO sells a token for USDC, USDT or
+// SOL, OTOCO buys one with them, and a stablecoin is never the trigger token.
+export function assertIntentPair(
+  intent: LimitIntent,
+  inputMint: string,
+  outputMint: string
+): void {
+  const triggerSide = getTriggerSide(intent);
+  const triggerMint = triggerSide === "input" ? inputMint : outputMint;
+  if (STABLE_MINTS.has(triggerMint)) {
+    const alternative =
+      triggerSide === "input"
+        ? "To buy with it, use --intent buy-dip, buy-pump or otoco"
+        : "To sell into it, use --intent take-profit, stop-loss, trailing-stop or oco";
+    throw new Error(
+      `--intent ${intent} watches the price of --${triggerSide === "input" ? "from" : "to"}, which is a stablecoin and cannot be a trigger token. ${alternative}, or swap --from and --to.`
+    );
+  }
+  if (intent !== "oco" && intent !== "otoco") {
+    return;
+  }
+  if (supportsIntent(intent, inputMint, outputMint)) {
+    return;
+  }
+  const shape =
+    intent === "oco"
+      ? "sells a token for USDC, USDT or SOL (e.g. --from JUP --to USDC)"
+      : "buys a token with USDC, USDT or SOL (e.g. --from USDC --to JUP)";
+  const hint = supportsIntent(intent, outputMint, inputMint)
+    ? " Swap --from and --to."
+    : "";
+  throw new Error(`--intent ${intent} only ${shape}.${hint}`);
 }
 
 // Accepts a USD value (or market cap when `mcap` is set), or a signed percent

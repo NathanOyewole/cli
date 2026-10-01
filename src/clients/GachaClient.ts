@@ -202,7 +202,7 @@ export type ShippingEstimate = {
 
 export type ShippingPrepare = {
   outboundShipmentId: string;
-  transactions: string[];
+  transactions?: string[];
   totalCost?: number;
 };
 
@@ -508,7 +508,6 @@ export class GachaClient {
     body: {
       nftAddresses: string[];
       shippingAddressId: string;
-      insurance?: boolean;
     },
     token: string
   ): Promise<ShippingPrepare> {

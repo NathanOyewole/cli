@@ -527,6 +527,11 @@ export class RewardsCommand {
         `Campaign "${campaign.slug}" is not claimable (status: ${RewardsCampaign.status(campaign)}).`
       );
     }
+    if (RewardsCampaign.requiresJupiterWallet(campaign)) {
+      throw new Error(
+        `Rewards for "${campaign.slug}" can only be claimed with a Jupiter wallet. Claim them at https://jup.ag/rewards/${campaign.slug}.`
+      );
+    }
     const stats = await RewardsClient.getStats(campaign.slug, signer.address);
 
     let claimUntilBox: number | undefined;
@@ -572,7 +577,7 @@ export class RewardsCommand {
     const claimed =
       res?.claimedRewards?.map((r) => ({
         mint: r.assetId,
-        amount: r.uiAmount,
+        amount: Number(r.uiAmount),
         valueUsd: r.usdValue,
       })) ??
       (res?.claimedAmount !== undefined

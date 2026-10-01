@@ -1,8 +1,13 @@
-import { isAddress, type Base64EncodedBytes } from "@solana/kit";
+import {
+  isAddress,
+  type Base64EncodedBytes,
+  type Base64EncodedWireTransaction,
+} from "@solana/kit";
 import type { Command } from "commander";
 
 import {
   StakeClient,
+  type LiquidExecuteResponse,
   type StakeAccount,
   type StakeCraftResponse,
 } from "../clients/StakeClient.ts";
@@ -17,6 +22,12 @@ const JUPSOL_MINT = "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v";
 const SOL_DECIMALS = Asset.SOL.decimals;
 // jup.ag/stake shows the validator APY as a range up to this many points higher.
 const APY_RANGE_UPPER_OFFSET_PCT = 2;
+const LIQUID_SUCCESS_STATUSES = new Set([
+  "success",
+  "confirmed",
+  "finalized",
+  "landed",
+]);
 
 type ActionRow = { label: string; value: string };
 
@@ -443,9 +454,9 @@ export class StakeCommand {
       const signedTx = await signer.signTransaction(
         order.tx as Base64EncodedBytes
       );
-      signature = (
-        await StakeClient.executeLiquid({ signedTx, orderResponse: order })
-      ).signature;
+      signature = await this.executeLiquidOrder(signedTx, () =>
+        StakeClient.executeLiquid({ signedTx, orderResponse: order })
+      );
     }
     this.printAction(
       signer.address,
@@ -509,8 +520,9 @@ export class StakeCommand {
       const signedTx = await signer.signTransaction(
         order.tx as Base64EncodedBytes
       );
-      signature = (await StakeClient.executeDelayedUnstake({ signedTx }))
-        .signature;
+      signature = await this.executeLiquidOrder(signedTx, () =>
+        StakeClient.executeDelayedUnstake({ signedTx })
+      );
     }
     this.printAction(
       signer.address,
@@ -519,6 +531,30 @@ export class StakeCommand {
       signature,
       order.tx
     );
+  }
+
+  // JupSOL orders are executed by Sanctum, whose status values aren't
+  // documented, so anything outside the known success states is reported as
+  // unconfirmed rather than as a success.
+  private static async executeLiquidOrder(
+    signedTx: Base64EncodedWireTransaction,
+    execute: () => Promise<LiquidExecuteResponse>
+  ): Promise<string> {
+    const localSignature = Signer.signatureOf(signedTx);
+    let result: LiquidExecuteResponse;
+    try {
+      result = await execute();
+    } catch (err) {
+      throw await Output.unconfirmedTxError(err, localSignature);
+    }
+    const signature = result.signature || localSignature;
+    if (!LIQUID_SUCCESS_STATUSES.has(String(result.status).toLowerCase())) {
+      throw await Output.unconfirmedTxError(
+        `JupSOL transaction status: ${result.status ?? "unknown"}.`,
+        signature
+      );
+    }
+    return signature;
   }
 
   private static async runCraft(
@@ -535,11 +571,19 @@ export class StakeCommand {
         signedTransaction,
         requestId: craft.requestId,
         lastValidBlockHeight: craft.lastValidBlockHeight,
+      }).catch(async (err: unknown) => {
+        throw await Output.unconfirmedTxError(
+          err,
+          Signer.signatureOf(signedTransaction)
+        );
       });
       if (result.status !== "Success") {
-        throw new Error(result.error ?? "Stake transaction failed.");
+        const reason = result.error ?? "Stake transaction failed.";
+        throw result.signature
+          ? await Output.unconfirmedTxError(reason, result.signature)
+          : new Error(reason);
       }
-      signature = result.signature ?? null;
+      signature = result.signature ?? Signer.signatureOf(signedTransaction);
     }
     this.printAction(
       signer.address,

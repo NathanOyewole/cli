@@ -52,10 +52,12 @@ export type PostExecuteRequest = {
 };
 
 export type PostExecuteResponse = {
+  status: "Success" | "Failed";
   code: number;
-  inputAmountResult: string;
-  outputAmountResult: string;
-  signature: string;
+  error?: string | null | undefined;
+  inputAmountResult?: string | null | undefined;
+  outputAmountResult?: string | null | undefined;
+  signature?: string | null | undefined;
 };
 
 export type HoldingsTokenAccount = {
@@ -114,8 +116,10 @@ type PostExecuteTransferRequest = {
 };
 
 type PostExecuteTransferResponse = {
+  status: string;
   code: number;
-  signature: string;
+  error?: string | null | undefined;
+  signature?: string | null | undefined;
 };
 
 export type PostReclaimCraftRequest = {

@@ -5,6 +5,7 @@ export type CampaignReward = {
   assetId?: string;
   rewardName?: string;
   redirectUrl?: string;
+  onlyClaimableThroughJup?: boolean;
   supposedUsdValue?: number;
   remainingPoolUsd?: number;
   threshold?: number;
@@ -153,7 +154,7 @@ export type PostClaimResponse = {
   assetId?: string;
   claimedRewards?: {
     amount: number;
-    uiAmount: number;
+    uiAmount: string;
     usdValue: number;
     assetId: string;
   }[];
