@@ -27,23 +27,43 @@ export class LendMath {
     return side.token1 !== null;
   }
 
+  // Mirrors the jup.ag vault rate breakdown: liquidity rate (plus a positive
+  // magnifier), reward campaigns, LST staking yield, and incentive magnifiers.
   public static vaultApys(vault: Vault): {
     supplyApyPct: number;
     borrowApyPct: number;
   } {
-    const supplyMagnifier = Number(vault.supplyRateMagnifier);
-    const borrowMagnifier = Number(vault.borrowRateMagnifier);
-    const supplyApr =
-      (Number(vault.supplyRate.liquidity.token0) +
-        (supplyMagnifier > 0 ? 0 : supplyMagnifier)) /
-      1e4;
-    const borrowApr =
-      (Number(vault.borrowRate.liquidity.token0) +
-        (borrowMagnifier < 0 ? 0 : borrowMagnifier)) /
-      1e4;
+    const supplyMagnifier = Number(vault.supplyRateMagnifier) / 1e4;
+    const borrowMagnifier = Number(vault.borrowRateMagnifier) / 1e4;
+    const rewards = (side: "supply" | "borrow", sign: number) =>
+      (vault.rewards ?? [])
+        .filter((r) => r.side === side)
+        .reduce(
+          (sum, r) => sum + this.aprToApy((sign * Number(r.apr)) / 1e4),
+          0
+        );
+    const staking = (side: VaultSide) =>
+      this.isSmart(side) ? 0 : Number(side.token0.stakingApr ?? 0) / 1e4;
+
+    const supply =
+      this.aprToApy(
+        Number(vault.supplyRate.liquidity.token0) / 1e4 +
+          (supplyMagnifier > 0 ? 0 : supplyMagnifier)
+      ) +
+      (supplyMagnifier > 0 ? this.aprToApy(supplyMagnifier) : 0) +
+      rewards("supply", 1) +
+      staking(vault.supplyToken);
+    const borrow =
+      this.aprToApy(
+        Number(vault.borrowRate.liquidity.token0) / 1e4 +
+          (borrowMagnifier < 0 ? 0 : borrowMagnifier)
+      ) +
+      (borrowMagnifier < 0 ? this.aprToApy(borrowMagnifier) : 0) +
+      rewards("borrow", -1) +
+      staking(vault.borrowToken);
     return {
-      supplyApyPct: round(this.aprToApy(supplyApr) * 100, 4),
-      borrowApyPct: round(this.aprToApy(borrowApr) * 100, 4),
+      supplyApyPct: round(supply * 100, 4),
+      borrowApyPct: round(borrow * 100, 4),
     };
   }
 

@@ -612,6 +612,7 @@ export class LendCommand {
       );
       if (isSol && "amount" in value) {
         ixs.push(
+          await LendTx.createAta(signer, asset, assetProgram),
           ...(await LendTx.wrapSol(signer, BigInt(value.amount), assetProgram))
         );
       }

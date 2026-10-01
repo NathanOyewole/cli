@@ -129,7 +129,6 @@ export class LendTx {
       tokenProgram,
     });
     return [
-      await this.createAta(owner, this.WSOL_MINT, tokenProgram),
       getTransferSolInstruction({
         source: createNoopSigner(address(owner)),
         destination: ata,

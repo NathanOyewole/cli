@@ -71,6 +71,19 @@ describe("LendMath", () => {
     });
   });
 
+  test("vault APYs add LST staking yield and incentive magnifiers", () => {
+    expect(
+      LendMath.vaultApys({
+        ...vault,
+        supplyToken: {
+          token0: { ...token("JupSOL", 9), stakingApr: 700 },
+          token1: null,
+        },
+        borrowRateMagnifier: "-200",
+      })
+    ).toEqual({ supplyApyPct: 11.0496, borrowApyPct: 5.6351 });
+  });
+
   test("max multiplier applies the reduce factor", () => {
     expect(LendMath.maxMultiplier(vault)).toBe(4.85);
   });

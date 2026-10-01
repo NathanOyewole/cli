@@ -39,6 +39,7 @@ export type VaultToken = {
   uiSymbol?: string;
   decimals: number;
   price: string;
+  stakingApr?: number | string;
 };
 
 export type VaultSide = { token0: VaultToken; token1: VaultToken | null };
@@ -70,6 +71,7 @@ export type Vault = {
   minimumBorrowing: string;
   totalPositions: number;
   oraclePrice: string | null;
+  rewards?: { side: "supply" | "borrow"; apr: string | number }[];
   metadata: {
     maxLeverage: boolean;
     nativeStake: boolean;
