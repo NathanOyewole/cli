@@ -141,8 +141,8 @@ describe("signing", () => {
   });
 
   test("session signature is base58 and verifies against the session key", async () => {
-    const { session, message } =
-      await PredictionsAuth.newCommentSession(WALLET);
+    const { stored, message } = await PredictionsAuth.newCommentSession(WALLET);
+    const session = await PredictionsAuth.toCommentSession(stored);
     const signature = await PredictionsAuth.signWithSession(session, "payload");
 
     expect(message).toContain(`Session: ${session.sessionPublicKey}`);
@@ -156,5 +156,17 @@ describe("signing", () => {
         new TextEncoder().encode("payload")
       )
     ).toBe(true);
+  });
+});
+
+describe("comment session cache", () => {
+  test("a session is reused until a minute before it expires", () => {
+    const now = Date.UTC(2026, 9, 1, 12, 0, 0);
+    expect(
+      PredictionsAuth.isSessionUsable({ expiresAt: now + 61_000 }, now)
+    ).toBe(true);
+    expect(
+      PredictionsAuth.isSessionUsable({ expiresAt: now + 60_000 }, now)
+    ).toBe(false);
   });
 });

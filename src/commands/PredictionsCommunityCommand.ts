@@ -1,11 +1,13 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import { HTTPError } from "ky";
 
 import { PredictionsClient } from "../clients/PredictionsClient.ts";
 import {
   PredictionsCommunityClient,
   type Clan,
   type Comment,
+  type CommentsResponse,
   type SessionAuth,
 } from "../clients/PredictionsCommunityClient.ts";
 import { Config } from "../lib/Config.ts";
@@ -21,6 +23,7 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TIMEFRAME_TAGS = ["5m", "15m"];
 const COMMENT_SORTS = ["newest", "oldest", "top"];
+const RECEIVED_INVITES_ACTION = "View received clan invitations";
 
 type Thread = { subcategory: string; tags: string[]; clanId?: string };
 type ThreadOpts = {
@@ -440,10 +443,24 @@ export class PredictionsCommunityCommand {
   }
 
   private static async receivedInvites(opts: { key?: string }): Promise<void> {
-    const signer = await Signer.load(opts.key ?? Config.load().activeKey);
+    const keyName = opts.key ?? Config.load().activeKey;
+    if (Config.dryRun) {
+      const wallet = await Signer.loadAddress(keyName);
+      this.printSignPreview(
+        { action: "invites", address: wallet },
+        PredictionsAuth.clanMessage(
+          RECEIVED_INVITES_ACTION,
+          {},
+          wallet,
+          Date.now()
+        )
+      );
+      return;
+    }
+    const signer = await Signer.load(keyName);
     const signature = await PredictionsAuth.signClanAction(
       signer,
-      "View received clan invitations",
+      RECEIVED_INVITES_ACTION,
       {}
     );
     const res = await PredictionsCommunityClient.postClanAction<{
@@ -589,18 +606,99 @@ export class PredictionsCommunityCommand {
     return { subcategory: event.subcategory, tags: [] };
   }
 
-  private static async openSession(signer: Signer): Promise<CommentSession> {
-    const { session, expiresAt, message } =
-      await PredictionsAuth.newCommentSession(signer.address);
+  /**
+   * Runs a session-signed request on the wallet's cached comment session,
+   * authorizing a new one (one wallet signature) only when none is usable. A
+   * cached session the server no longer knows is replaced once.
+   */
+  private static async withSession<T>(
+    keyName: string,
+    run: (session: CommentSession) => Promise<T>
+  ): Promise<T> {
+    const wallet = await Signer.loadAddress(keyName);
+    const cached = PredictionsAuth.loadCommentSession(wallet);
+    if (!cached) {
+      return run(await this.authorizeSession(keyName));
+    }
+    try {
+      return await run(await PredictionsAuth.toCommentSession(cached));
+    } catch (err) {
+      if (!(await this.isSessionRejected(err))) {
+        throw err;
+      }
+      PredictionsAuth.clearCommentSession(wallet);
+      return run(await this.authorizeSession(keyName));
+    }
+  }
+
+  /** e.g. `comment_session_not_found` (404) once the server drops a session. */
+  private static async isSessionRejected(err: unknown): Promise<boolean> {
+    if (!(err instanceof HTTPError)) {
+      return false;
+    }
+    const body = await err.response
+      .clone()
+      .json()
+      .catch(() => null);
+    const code = (body as { code?: unknown } | null)?.code;
+    return typeof code === "string" && code.startsWith("comment_session");
+  }
+
+  private static async authorizeSession(
+    keyName: string
+  ): Promise<CommentSession> {
+    if (Config.dryRun) {
+      throw new Error(
+        "The cached comment session was rejected, and --dry-run won't sign a new one. Re-run without --dry-run."
+      );
+    }
+    const signer = await Signer.load(keyName);
+    const { stored, message } = await PredictionsAuth.newCommentSession(
+      signer.address
+    );
     const signed = await PredictionsAuth.signWithWallet(signer, message);
     const created = await PredictionsCommunityClient.createSession({
       walletAddress: signer.address,
-      sessionPublicKey: session.sessionPublicKey,
-      nonce: session.nonce,
-      expiresAt,
+      sessionPublicKey: stored.sessionPublicKey,
+      nonce: stored.nonce,
+      expiresAt: stored.expiresAt,
       ...signed,
     });
-    return { ...session, nonce: created.nonce };
+    const session = { ...stored, nonce: created.nonce };
+    PredictionsAuth.saveCommentSession(session);
+    return PredictionsAuth.toCommentSession(session);
+  }
+
+  /** In dry-run, a session-signed action shows the wallet message it would need, if any. */
+  private static async sessionPreview(
+    keyName: string,
+    preview: Record<string, unknown>
+  ): Promise<void> {
+    const wallet = await Signer.loadAddress(keyName);
+    const sessionCached = PredictionsAuth.loadCommentSession(wallet) !== null;
+    const message = sessionCached
+      ? null
+      : (await PredictionsAuth.newCommentSession(wallet)).message;
+    this.printSignPreview(
+      { ...preview, address: wallet, sessionCached },
+      message
+    );
+  }
+
+  private static printSignPreview(
+    preview: Record<string, unknown>,
+    message: string | null
+  ): void {
+    if (Output.isJson()) {
+      Output.json({ dryRun: true, ...preview, message });
+      return;
+    }
+    console.log(Output.DRY_RUN_LABEL);
+    console.log(
+      message
+        ? `Would sign with the wallet:\n${message}`
+        : "Would sign with the cached comment session; no wallet signature needed."
+    );
   }
 
   private static commentJson(c: Comment): Record<string, unknown> {
@@ -631,45 +729,61 @@ export class PredictionsCommunityCommand {
     }
     const thread = await this.resolveThread(opts);
     const limit = Number(opts.limit);
-    let headers: Record<string, string> | undefined;
     let walletAddress = opts.address;
+    const params = {
+      subcategory: thread.subcategory,
+      tags: thread.tags,
+      sort: opts.sort,
+      cursor: opts.cursor,
+      limit,
+    };
+    let res: CommentsResponse;
     if (thread.clanId) {
-      const signer = await Signer.load(opts.key ?? Config.load().activeKey);
-      walletAddress ??= signer.address;
-      const session = await this.openSession(signer);
-      const timestamp = Date.now();
-      const payload = PredictionsAuth.clanChatReadPayload({
-        sessionPublicKey: session.sessionPublicKey,
-        clanId: thread.clanId,
-        sort: opts.sort,
-        cursor: opts.cursor ?? null,
-        limit,
-        timestamp,
-        nonce: session.nonce,
+      const clanId = thread.clanId;
+      const keyName = opts.key ?? Config.load().activeKey;
+      const wallet = await Signer.loadAddress(keyName);
+      walletAddress ??= wallet;
+      if (Config.dryRun && !PredictionsAuth.loadCommentSession(wallet)) {
+        await this.sessionPreview(keyName, {
+          action: "comments",
+          subcategory: thread.subcategory,
+          tags: thread.tags,
+        });
+        return;
+      }
+      res = await this.withSession(keyName, async (session) => {
+        const timestamp = Date.now();
+        const payload = PredictionsAuth.clanChatReadPayload({
+          sessionPublicKey: session.sessionPublicKey,
+          clanId,
+          sort: opts.sort,
+          cursor: opts.cursor ?? null,
+          limit,
+          timestamp,
+          nonce: session.nonce,
+        });
+        return PredictionsCommunityClient.getComments(
+          { ...params, walletAddress },
+          {
+            "x-comment-session-public-key": session.sessionPublicKey,
+            "x-comment-nonce": session.nonce,
+            "x-comment-signature": await PredictionsAuth.signWithSession(
+              session,
+              payload
+            ),
+            "x-comment-timestamp": String(timestamp),
+          }
+        );
       });
-      headers = {
-        "x-comment-session-public-key": session.sessionPublicKey,
-        "x-comment-nonce": session.nonce,
-        "x-comment-signature": await PredictionsAuth.signWithSession(
-          session,
-          payload
-        ),
-        "x-comment-timestamp": String(timestamp),
-      };
-    } else if (opts.key && !walletAddress) {
-      walletAddress = await PredictionsFormat.resolveAddress(opts);
-    }
-    const res = await PredictionsCommunityClient.getComments(
-      {
-        subcategory: thread.subcategory,
-        tags: thread.tags,
+    } else {
+      if (opts.key && !walletAddress) {
+        walletAddress = await PredictionsFormat.resolveAddress(opts);
+      }
+      res = await PredictionsCommunityClient.getComments({
+        ...params,
         walletAddress,
-        sort: opts.sort,
-        cursor: opts.cursor,
-        limit,
-      },
-      headers
-    );
+      });
+    }
     const comments = res.data.map((c) => this.commentJson(c));
 
     if (Output.isJson()) {
@@ -721,7 +835,7 @@ export class PredictionsCommunityCommand {
 
   /**
    * Shared by every comment write: in dry-run, show what the wallet would sign;
-   * otherwise authorize a session key and sign the payload with it.
+   * otherwise sign the payload with the wallet's comment session.
    */
   private static async commentWrite<T>(
     keyName: string | undefined,
@@ -731,30 +845,21 @@ export class PredictionsCommunityCommand {
   ): Promise<T | null> {
     const key = keyName ?? Config.load().activeKey;
     if (Config.dryRun) {
-      const wallet = await Signer.loadAddress(key);
-      const { message } = await PredictionsAuth.newCommentSession(wallet);
-      if (Output.isJson()) {
-        Output.json({ dryRun: true, ...preview, address: wallet, message });
-      } else {
-        console.log(Output.DRY_RUN_LABEL);
-        console.log(
-          `Would authorize a comment session by signing:\n${message}`
-        );
-      }
+      await this.sessionPreview(key, preview);
       return null;
     }
-    const signer = await Signer.load(key);
-    const session = await this.openSession(signer);
-    const timestamp = Date.now();
-    const signature = await PredictionsAuth.signWithSession(
-      session,
-      payload(session, timestamp)
-    );
-    return submit({
-      sessionPublicKey: session.sessionPublicKey,
-      nonce: session.nonce,
-      timestamp,
-      signature,
+    return this.withSession(key, async (session) => {
+      const timestamp = Date.now();
+      const signature = await PredictionsAuth.signWithSession(
+        session,
+        payload(session, timestamp)
+      );
+      return submit({
+        sessionPublicKey: session.sessionPublicKey,
+        nonce: session.nonce,
+        timestamp,
+        signature,
+      });
     });
   }
 

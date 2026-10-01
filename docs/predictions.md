@@ -644,7 +644,7 @@ jup predictions clans reject --clan <clanId|handle> --request <requestId>
 jup predictions clans kick --clan <clanId|handle> --member <wallet-address>
 ```
 
-- Clan actions are authorized by a signed message, not a transaction. With `--dry-run` they print the message and submit nothing
+- Clan actions are authorized by a signed message, not a transaction. With `--dry-run` they print the message and submit nothing; this includes `clans invites`, which signs a message to read your invitations
 
 ```js
 // Example JSON response (get):
@@ -714,7 +714,8 @@ jup predictions comments delete --comment <commentId>
 
 - Threads are per event subcategory (timed events add their timeframe), the arcade chat, or a clan chat
 - `--sort`: `newest` (default), `oldest`, `top`
-- Writes authorize a 24-hour comment session by signing one message with your wallet, then sign the comment with that session key. `--dry-run` prints the wallet message and submits nothing
+- Writes and clan-chat reads use a 24-hour comment session: the first call signs one message with your wallet to authorize a session key, which then signs each request. Like jup.ag, the session key is cached per wallet in `~/.config/jup/auth/predict-comments-<wallet>.json` (mode 0600) and reused until it expires; a session the server no longer knows is replaced once
+- `--dry-run` submits nothing and never authorizes a session. It returns `sessionCached` and the wallet `message` it would sign (`null` when a cached session would be used). `comments list --clan` under `--dry-run` reads with a cached session, or prints the preview when there is none
 
 ```js
 // Example JSON response (list):
