@@ -2,6 +2,7 @@
 import { Command } from "commander";
 
 import { ConfigCommand } from "./commands/ConfigCommand.ts";
+import { GachaCommand } from "./commands/GachaCommand.ts";
 import { KeysCommand } from "./commands/KeysCommand.ts";
 import { LendCommand } from "./commands/LendCommand.ts";
 import { PerpsCommand } from "./commands/PerpsCommand.ts";
@@ -39,6 +40,7 @@ program
   });
 
 ConfigCommand.register(program);
+GachaCommand.register(program);
 KeysCommand.register(program);
 LendCommand.register(program);
 PerpsCommand.register(program);
