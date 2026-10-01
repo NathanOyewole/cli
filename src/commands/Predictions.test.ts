@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 
 import type { PredictionEvent } from "../clients/PredictionsClient.ts";
 import type { ArcadeRound } from "../clients/PredictionsArcadeClient.ts";
+import { Config } from "../lib/Config.ts";
 import { PredictionsExecution } from "../lib/PredictionsExecution.ts";
+import { PredictionsFormat } from "../lib/PredictionsFormat.ts";
+import type { Signer } from "../lib/Signer.ts";
 import { PredictionsArcadeCommand } from "./PredictionsArcadeCommand.ts";
 import { PredictionsCommand } from "./PredictionsCommand.ts";
 import { PredictionsCommunityCommand } from "./PredictionsCommunityCommand.ts";
@@ -25,6 +28,158 @@ describe("partial sells", () => {
   test("min sell price sits $0.02 under the bid, floored at $0.01", () => {
     expect(PredictionsCommand.minSellPriceMicro("780000")).toBe("760000");
     expect(PredictionsCommand.minSellPriceMicro("25000")).toBe("10000");
+  });
+});
+
+describe("sell value", () => {
+  test("contracts times the bid, in micro-USD", () => {
+    expect(PredictionsCommand.sellValueMicroUsd(50_410_000n, "713000")).toBe(
+      35_942_330n
+    );
+  });
+});
+
+describe("slippage confirmation", () => {
+  test("quotes under 5% need no flag", () => {
+    expect(() =>
+      PredictionsExecution.assertSlippageAccepted(
+        { slippageBps: 14, maxSlippageBps: 2500 },
+        undefined
+      )
+    ).not.toThrow();
+  });
+
+  test("5% or more needs --slippage at or above the quote", () => {
+    const quote = { slippageBps: 600, maxSlippageBps: 2500 };
+    expect(() =>
+      PredictionsExecution.assertSlippageAccepted(quote, undefined)
+    ).toThrow(
+      "Estimated slippage is 6%; the order reverts above 25%. Re-run with --slippage 600 or higher to accept it."
+    );
+    expect(() =>
+      PredictionsExecution.assertSlippageAccepted(quote, 599)
+    ).toThrow();
+    expect(() =>
+      PredictionsExecution.assertSlippageAccepted(quote, 600)
+    ).not.toThrow();
+  });
+
+  test("a quote at the max warns that the order will likely fail", () => {
+    expect(() =>
+      PredictionsExecution.assertSlippageAccepted(
+        { slippageBps: 2500, maxSlippageBps: 2500 },
+        undefined
+      )
+    ).toThrow(
+      "Estimated slippage is 25%, at or above the 25% max, so the order will likely fail."
+    );
+  });
+
+  test("sells losing $2,000 or more to slippage need confirmation", () => {
+    const quote = { slippageBps: 100, maxSlippageBps: 2500 };
+    expect(() =>
+      PredictionsExecution.assertSlippageAccepted(
+        quote,
+        undefined,
+        200_000_000_000n
+      )
+    ).toThrow("Re-run with --slippage 100 or higher");
+    expect(() =>
+      PredictionsExecution.assertSlippageAccepted(
+        quote,
+        undefined,
+        199_999_000_000n
+      )
+    ).not.toThrow();
+  });
+
+  test("--slippage takes whole basis points", () => {
+    expect(PredictionsExecution.parseSlippageBps("600")).toBe(600);
+    expect(PredictionsExecution.parseSlippageBps(undefined)).toBeUndefined();
+    expect(() => PredictionsExecution.parseSlippageBps("6%")).toThrow(
+      "--slippage must be a whole number of basis points"
+    );
+    expect(() => PredictionsExecution.parseSlippageBps("-5")).toThrow();
+  });
+});
+
+describe("dry run", () => {
+  test("a quote without a transaction fails like a live run", async () => {
+    Config.dryRun = true;
+    try {
+      await expect(
+        PredictionsExecution.signAndExecute({} as Signer, {
+          transaction: null,
+        })
+      ).rejects.toThrow("Insufficient balance to build this transaction.");
+    } finally {
+      Config.dryRun = false;
+    }
+  });
+});
+
+describe("batches", () => {
+  test("stop at the first failure and keep what landed", async () => {
+    const result = await PredictionsExecution.runInOrder(
+      ["a", "b", "c"],
+      async (item) => {
+        if (item === "b") {
+          throw new Error("tx expired");
+        }
+        return item.toUpperCase();
+      }
+    );
+    expect(result).toEqual({
+      done: ["A"],
+      failed: { item: "b", error: "tx expired" },
+    });
+  });
+
+  test("run every item when nothing fails", async () => {
+    expect(
+      await PredictionsExecution.runInOrder([1, 2], async (n, i) => n + i)
+    ).toEqual({ done: [1, 3], failed: null });
+  });
+
+  test("the error names the failing item and the progress", () => {
+    expect(
+      PredictionsExecution.batchError(
+        { label: "close Pos2", error: "tx expired" },
+        1,
+        3
+      )
+    ).toBe("close Pos2 failed: tx expired (1 of 3 completed before it).");
+  });
+});
+
+describe("fill errors", () => {
+  const fill = { filledContracts: 0, avgFillPriceUsd: null };
+
+  test("a keeper-failed order is an error", () => {
+    expect(
+      PredictionsExecution.fillError(
+        { ...fill, orderStatus: "failed" },
+        "Ord1",
+        "Sig1"
+      )
+    ).toBe("Order Ord1 was not filled: the keeper marked it failed (tx Sig1).");
+  });
+
+  test("pending and filled orders are not", () => {
+    expect(
+      PredictionsExecution.fillError(
+        { ...fill, orderStatus: "pending" },
+        "Ord1",
+        "Sig1"
+      )
+    ).toBeNull();
+    expect(
+      PredictionsExecution.fillError(
+        { ...fill, orderStatus: null },
+        "Ord1",
+        null
+      )
+    ).toBeNull();
   });
 });
 
@@ -61,6 +216,17 @@ describe("claimable", () => {
         marketMetadata: { result: "no" },
       })
     ).toBe(true);
+  });
+});
+
+describe("contracts", () => {
+  test("keep the fraction the whole-contract field truncates", () => {
+    expect(PredictionsFormat.contracts("660000", "0")).toBe(0.66);
+    expect(PredictionsFormat.contracts("50410000", "50")).toBe(50.41);
+  });
+
+  test("fall back to whole contracts without a micro field", () => {
+    expect(PredictionsFormat.contracts(undefined, "12")).toBe(12);
   });
 });
 

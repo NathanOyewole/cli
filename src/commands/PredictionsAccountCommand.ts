@@ -173,51 +173,82 @@ export class PredictionsAccountCommand {
       throw new Error("No positions to claim.");
     }
 
-    const results = [];
-    for (const req of requests) {
-      const { signature } = await PredictionsExecution.signAndExecute(
-        signer,
-        req
-      );
-      results.push({
-        positionPubkey: req.position.positionPubkey,
-        side: req.position.isYes ? "yes" : "no",
-        contracts: Number(req.position.contracts),
-        payoutUsd: NumberConverter.fromMicroUsd(req.position.payoutAmountUsd),
-        signature,
-        ...(Config.dryRun && { transaction: req.transaction }),
-      });
+    if (Config.dryRun && !Output.isJson()) {
+      console.log(Output.DRY_RUN_LABEL);
     }
+    const { done: results, failed } = await PredictionsExecution.runInOrder(
+      requests,
+      async (req, index) => {
+        const { signature } = await PredictionsExecution.signAndExecute(
+          signer,
+          req
+        );
+        PredictionsFormat.printProgress(
+          index,
+          requests.length,
+          `claim ${req.position.positionPubkey}`,
+          signature
+        );
+        return {
+          positionPubkey: req.position.positionPubkey,
+          side: req.position.isYes ? "yes" : "no",
+          contracts: PredictionsFormat.contracts(
+            req.position.contractsMicro,
+            req.position.contracts
+          ),
+          payoutUsd: NumberConverter.fromMicroUsd(req.position.payoutAmountUsd),
+          signature,
+          ...(Config.dryRun && { transaction: req.transaction }),
+        };
+      }
+    );
     const payoutUsd = results.reduce((sum, r) => sum + r.payoutUsd, 0);
+    const failedItem = failed && {
+      positionPubkey: failed.item.position.positionPubkey,
+      error: failed.error,
+    };
+    const error =
+      failedItem &&
+      PredictionsExecution.batchError(
+        {
+          label: `claim ${failedItem.positionPubkey}`,
+          error: failedItem.error,
+        },
+        results.length,
+        requests.length
+      );
 
     if (Output.isJson()) {
       Output.json({
+        ...(error && { error }),
         ...(Config.dryRun && { dryRun: true }),
         action: "claim",
         payoutUsd,
         results,
+        ...(failedItem && { failed: failedItem }),
       });
+      PredictionsFormat.failOn(error);
       return;
     }
-    if (Config.dryRun) {
-      console.log(Output.DRY_RUN_LABEL);
+    if (results.length > 0) {
+      Output.table({
+        type: "horizontal",
+        headers: {
+          positionPubkey: "Position",
+          side: "Side",
+          payout: "Payout",
+          ...(!Config.dryRun && { signature: "Tx Signature" }),
+        },
+        rows: results.map((r) => ({
+          positionPubkey: r.positionPubkey,
+          side: PredictionsFormat.formatSide(r.side),
+          payout: Output.formatDollar(r.payoutUsd),
+          signature: r.signature,
+        })),
+      });
+      console.log(`Total payout: ${Output.formatDollar(payoutUsd)}`);
     }
-    Output.table({
-      type: "horizontal",
-      headers: {
-        positionPubkey: "Position",
-        side: "Side",
-        payout: "Payout",
-        ...(!Config.dryRun && { signature: "Tx Signature" }),
-      },
-      rows: results.map((r) => ({
-        positionPubkey: r.positionPubkey,
-        side: PredictionsFormat.formatSide(r.side),
-        payout: Output.formatDollar(r.payoutUsd),
-        signature: r.signature,
-      })),
-    });
-    console.log(`Total payout: ${Output.formatDollar(payoutUsd)}`);
+    PredictionsFormat.failOn(error);
   }
 
   private static async leaderboard(opts: {

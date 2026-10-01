@@ -28,6 +28,16 @@ export type TrackedOrder = {
 const POLL_INTERVAL_MS = 3_000;
 const POLL_TIMEOUT_MS = 60_000;
 
+/** jup.ag asks for confirmation at or above 5% simulated slippage... */
+const SLIPPAGE_WARNING_BPS = 500;
+/** ...or when slippage would take at least $2,000 off a sell. */
+const SIZE_IMPACT_WARNING_MICRO_USD = 2_000_000_000n;
+
+export type SlippageQuote = {
+  slippageBps?: number | null;
+  maxSlippageBps?: number | null;
+};
+
 export class PredictionsExecution {
   /**
    * Signs a server-built Predict transaction and submits it to `/execute`,
@@ -39,11 +49,11 @@ export class PredictionsExecution {
     request: ExecutableRequest,
     opts: { ownerPubkey?: string } = {}
   ): Promise<{ signature: string | null }> {
-    if (Config.dryRun) {
-      return { signature: null };
-    }
     if (!request.transaction) {
       throw new Error("Insufficient balance to build this transaction.");
+    }
+    if (Config.dryRun) {
+      return { signature: null };
     }
     const signedTransaction = await signer.signTransaction(
       request.transaction as Base64EncodedBytes
@@ -63,27 +73,128 @@ export class PredictionsExecution {
   }
 
   /**
+   * The server quotes the slippage it simulated for the order. jup.ag makes the
+   * user confirm a high quote before signing; the CLI requires
+   * `--slippage <bps>` at or above the quote instead.
+   */
+  public static assertSlippageAccepted(
+    quote: SlippageQuote,
+    acceptedBps: number | undefined,
+    sellSizeMicroUsd?: bigint
+  ): void {
+    const slippageBps = quote.slippageBps ?? 0;
+    const needsConfirmation =
+      slippageBps >= SLIPPAGE_WARNING_BPS ||
+      (sellSizeMicroUsd !== undefined &&
+        (sellSizeMicroUsd * BigInt(slippageBps)) / 10_000n >=
+          SIZE_IMPACT_WARNING_MICRO_USD);
+    if (
+      !needsConfirmation ||
+      (acceptedBps !== undefined && acceptedBps >= slippageBps)
+    ) {
+      return;
+    }
+    const maxBps = quote.maxSlippageBps ?? null;
+    const estimate = `Estimated slippage is ${this.formatBps(slippageBps)}`;
+    const reason =
+      maxBps === null
+        ? `${estimate}.`
+        : slippageBps >= maxBps
+          ? `${estimate}, at or above the ${this.formatBps(maxBps)} max, so the order will likely fail.`
+          : `${estimate}; the order reverts above ${this.formatBps(maxBps)}.`;
+    throw new Error(
+      `${reason} Re-run with --slippage ${slippageBps} or higher to accept it.`
+    );
+  }
+
+  public static parseSlippageBps(
+    input: string | undefined
+  ): number | undefined {
+    if (input === undefined) {
+      return undefined;
+    }
+    if (!/^\d+$/.test(input) || !Number.isSafeInteger(Number(input))) {
+      throw new Error(
+        "--slippage must be a whole number of basis points, e.g. 600 for 6%."
+      );
+    }
+    return Number(input);
+  }
+
+  private static formatBps(bps: number): string {
+    return `${Number((bps / 100).toFixed(2))}%`;
+  }
+
+  /** A keeper-rejected order fails the command even though its tx landed. */
+  public static fillError(
+    fill: OrderFill,
+    orderPubkey: string,
+    signature: string | null
+  ): string | null {
+    if (fill.orderStatus !== "failed") {
+      return null;
+    }
+    return `Order ${orderPubkey} was not filled: the keeper marked it failed (tx ${signature ?? "unknown"}).`;
+  }
+
+  /**
    * A submitted order is filled asynchronously by a keeper. Poll the open
    * orders list (the web app's approach) and fall back to trade history,
    * because filled orders are closed and drop out of the list within seconds.
+   * On timeout the last observed state is returned, still "pending".
    */
   public static async waitForFill(
     order: TrackedOrder,
     timeoutMs = POLL_TIMEOUT_MS
   ): Promise<OrderFill> {
     const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const fill = await this.checkFill(order);
-      if (fill.orderStatus !== "pending") {
-        return fill;
-      }
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-    }
-    return {
+    let last: OrderFill = {
       orderStatus: "pending",
       filledContracts: null,
       avgFillPriceUsd: null,
     };
+    while (Date.now() < deadline) {
+      last = await this.checkFill(order);
+      if (last.orderStatus !== "pending") {
+        return last;
+      }
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    }
+    return last;
+  }
+
+  /**
+   * Runs items in order and stops at the first failure, so a batch can report
+   * what already landed on-chain alongside the item that broke.
+   */
+  public static async runInOrder<T, R>(
+    items: T[],
+    run: (item: T, index: number) => Promise<R>
+  ): Promise<{ done: R[]; failed: { item: T; error: string } | null }> {
+    const done: R[] = [];
+    for (const [index, item] of items.entries()) {
+      try {
+        done.push(await run(item, index));
+      } catch (err) {
+        return {
+          done,
+          failed: {
+            item,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        };
+      }
+    }
+    return { done, failed: null };
+  }
+
+  /** One line for a batch that stopped part-way: what broke and how far it got. */
+  public static batchError(
+    failed: { label: string; error: string },
+    completed: number,
+    total: number
+  ): string {
+    return `${failed.label} failed: ${failed.error} (${completed} of ${total} completed before it).`;
   }
 
   private static async checkFill(order: TrackedOrder): Promise<OrderFill> {
@@ -142,9 +253,10 @@ export class PredictionsExecution {
     if (filled) {
       return {
         orderStatus: "filled",
-        filledContracts: filled.filledContractsMicro
-          ? NumberConverter.fromMicroUsd(filled.filledContractsMicro)
-          : Number(filled.filledContracts),
+        filledContracts: PredictionsFormat.contracts(
+          filled.filledContractsMicro,
+          filled.filledContracts
+        ),
         avgFillPriceUsd: NumberConverter.fromMicroUsd(filled.avgFillPriceUsd),
       };
     }

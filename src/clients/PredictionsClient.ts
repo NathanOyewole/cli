@@ -166,6 +166,7 @@ export type ClaimPositionResponse = ExecutableRequest & {
     ownerPubkey?: string;
     isYes: boolean;
     contracts: string;
+    contractsMicro?: string;
     payoutAmountUsd: string;
   };
 };

@@ -248,6 +248,7 @@ jup predictions positions --position <pubkey>
 jup predictions open --market <marketId> --side yes --amount 10
 jup predictions open --market <marketId> --side no --amount 5 --input USDC
 jup predictions open --market <marketId> --side y --amount 10 --limit 0.42
+jup predictions open --market <marketId> --side yes --amount 500 --slippage 700
 jup predictions open --market <marketId> --side yes --amount 10 --dry-run
 ```
 
@@ -256,9 +257,11 @@ jup predictions open --market <marketId> --side yes --amount 10 --dry-run
 - `--amount`: input token amount (human-readable)
 - `--input`: input token symbol or mint (default: `USDC`); timed stock (BisonFi) markets accept USDC only
 - `--limit`: place a limit buy at this max price per contract in USD (between 0 and 1). Polymarket markets only
+- `--slippage`: accept the server's simulated slippage up to this many bps. The server quotes `slippageBps` for every order and caps it at `maxSlippageBps` (the order reverts above it). Like jup.ag's confirmation prompt, a quote of 500 bps (5%) or more is refused unless `--slippage` is at or above it; this also applies under `--dry-run`
 - Saba (`gx`) markets are bought as tickets and only support `--side yes`
 - Kalshi buys are currently disabled by the API; Kalshi positions can still be closed and claimed
-- After submitting a market order, the CLI waits up to 60 seconds for the keeper to fill it and reports `orderStatus`: `filled`, `failed`, or `pending` (still unfilled when the wait ended). Limit orders report `pending` and rest until filled or cancelled
+- After submitting a market order, the CLI waits up to 60 seconds for the keeper to fill it and reports `orderStatus`: `filled`, `failed`, or `pending` (still unfilled when the wait ended). Limit orders get a 15-second check, since a marketable limit can fill at once; otherwise they report `pending` and rest until filled or cancelled
+- A `failed` order (the keeper rejected it) exits non-zero; the JSON response still carries the order details plus an `error`. `pending` exits 0
 - `--dry-run` previews the order without signing, showing cost, fees, and payout. JSON response includes the unsigned base64 `transaction`
 
 ```js
@@ -272,6 +275,9 @@ jup predictions open --market <marketId> --side yes --amount 10 --dry-run
   "contracts": 10,
   "costUsd": 6.50,
   "feeUsd": 0.07,
+  "maxBuyPriceUsd": 0.72, // on-chain price cap the server set for the order
+  "slippageBps": 14, // simulated slippage the server quoted
+  "maxSlippageBps": 2500, // the order reverts above this
   "positionAvgPriceUsd": 0.65,
   "positionPayoutUsd": 10.00,
   "positionPubkey": "3qMZ...83tz",
@@ -306,9 +312,12 @@ jup predictions close --position <pubkey> --dry-run
 ```
 
 - The CLI auto-detects whether to sell or claim based on the market result
-- Full sells accept fills down to $0.02 under the current bid (never below $0.01), like jup.ag
-- `--contracts` rounds down to the venue's step (1 contract on Kalshi, 0.01 on Polymarket); Saba positions can't be sold early
-- Sells wait for the fill and report `orderStatus`, like `open`
+- Like jup.ag, full sells ask for a floor $0.02 under the current bid (never below $0.01), but the server sets the on-chain floor itself: `minSellPriceUsd` in the response, up to `maxSlippageBps` under the bid. Check it in the `--dry-run` preview
+- `--slippage <bps>` works as on `open`: a quote of 500 bps or more, or slippage that would cost $2,000 or more of the sale, is refused unless `--slippage` is at or above `slippageBps`
+- `--contracts` rounds down to the venue's step (1 contract on Kalshi, 0.01 on Polymarket)
+- Saba (`gx`) positions can't be sold, fully or partly; hold them until the market resolves, then claim
+- Sells wait for the fill and report `orderStatus`, like `open`; a `failed` sell exits non-zero
+- `--position all` asks the server for a sell (or claim) per position, with a 5% price floor like jup.ag's Close All, and runs them in order. Table mode prints each one as it lands; sells are then checked for fills. If one fails, the rest are skipped: the response lists the completed `results`, the `failed` item and an `error`, and the command exits non-zero
 - `--dry-run` previews without signing. JSON response includes the unsigned base64 `transaction`
 
 ```js
@@ -321,8 +330,13 @@ jup predictions close --position <pubkey> --dry-run
   "positionPubkey": "3qMZ...83tz",
   "partial": false,
   "contracts": 10,
-  "costUsd": 0,
+  "costUsd": 0, // always 0 for sells
   "feeUsd": 0.07,
+  "sellPriceUsd": 0.72, // current bid
+  "proceedsUsd": 7.20, // expected: contracts × sellPriceUsd, before fees
+  "minSellPriceUsd": 0.54, // on-chain floor the server set
+  "slippageBps": 14,
+  "maxSlippageBps": 2500,
   "orderPubkey": "2pf8...N33a",
   "orderStatus": "filled",
   "filledContracts": 10,
@@ -347,11 +361,18 @@ jup predictions close --position <pubkey> --dry-run
   "action": "close-all",
   "results": [
     {
-      "action": "close", // or "claim"
+      "action": "close", // or "claim" (claims have no order or fill fields)
       "positionPubkey": "3qMZ...83tz",
+      "orderPubkey": "2pf8...N33a",
+      "orderStatus": "filled", // null in dry-run
+      "filledContracts": 10,
+      "avgFillPriceUsd": 0.72,
       "signature": "5YhT...9AKU"
     }
-  ]
+  ],
+  // only when an item failed (exit code 1):
+  "failed": { "action": "close", "positionPubkey": "9hQh...PpVi", "error": "..." },
+  "error": "close 9hQh...PpVi failed: ... (1 of 2 completed before it)."
 }
 
 // Example JSON response (cancel):
@@ -369,6 +390,8 @@ jup predictions claim                       # every claimable position
 jup predictions claim --position <pubkey>   # one position
 jup predictions claim --dry-run
 ```
+
+- Claims run one by one; table mode prints each as it lands. If one fails, the rest are skipped: the response lists the completed `results` plus `failed` and `error`, and the command exits non-zero
 
 ```js
 // Example JSON response:
@@ -621,7 +644,7 @@ jup predictions clans reject --clan <clanId|handle> --request <requestId>
 jup predictions clans kick --clan <clanId|handle> --member <wallet-address>
 ```
 
-- Clan actions are authorized by a signed message, not a transaction. With `--dry-run` they print the message and submit nothing
+- Clan actions are authorized by a signed message, not a transaction. With `--dry-run` they print the message and submit nothing; this includes `clans invites`, which signs a message to read your invitations
 
 ```js
 // Example JSON response (get):
@@ -691,7 +714,8 @@ jup predictions comments delete --comment <commentId>
 
 - Threads are per event subcategory (timed events add their timeframe), the arcade chat, or a clan chat
 - `--sort`: `newest` (default), `oldest`, `top`
-- Writes authorize a 24-hour comment session by signing one message with your wallet, then sign the comment with that session key. `--dry-run` prints the wallet message and submits nothing
+- Writes and clan-chat reads use a 24-hour comment session: the first call signs one message with your wallet to authorize a session key, which then signs each request. Like jup.ag, the session key is cached per wallet in `~/.config/jup/auth/predict-comments-<wallet>.json` (mode 0600) and reused until it expires; a session the server no longer knows is replaced once
+- `--dry-run` submits nothing and never authorizes a session. It returns `sessionCached` and the wallet `message` it would sign (`null` when a cached session would be used). `comments list --clan` under `--dry-run` reads with a cached session, or prints the preview when there is none
 
 ```js
 // Example JSON response (list):

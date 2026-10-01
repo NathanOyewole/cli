@@ -2,9 +2,20 @@ import {
   createKeyPairFromPrivateKeyBytes,
   getAddressFromPublicKey,
   getBase58Decoder,
+  getBase58Encoder,
   signBytes,
 } from "@solana/kit";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
 
+import { Config } from "./Config.ts";
 import type { Signer } from "./Signer.ts";
 
 export type WalletSignature = {
@@ -20,7 +31,18 @@ export type CommentSession = {
   privateKey: CryptoKey;
 };
 
+/** The web app's localStorage shape: the base58 seed is the session key. */
+export type StoredCommentSession = {
+  walletAddress: string;
+  sessionPublicKey: string;
+  sessionSecret: string;
+  nonce: string;
+  expiresAt: number;
+};
+
 const SESSION_TTL_MS = 86_400_000;
+/** Don't start a request on a session that could expire mid-flight. */
+const SESSION_EXPIRY_MARGIN_MS = 60_000;
 
 /**
  * Predict's off-chain social actions (clans, usernames, comments) are
@@ -174,24 +196,30 @@ export class PredictionsAuth {
 
   /**
    * Comments are signed by an ephemeral session key that the wallet authorizes
-   * once, so each comment doesn't need a wallet signature.
+   * once, so each comment doesn't need a wallet signature. Like jup.ag, the
+   * key is kept for its 24h lifetime instead of re-authorizing every call.
    */
   public static async newCommentSession(wallet: string): Promise<{
-    session: CommentSession;
-    expiresAt: number;
+    stored: StoredCommentSession;
     message: string;
   }> {
-    const seed = crypto.getRandomValues(new Uint8Array(32));
-    const { privateKey, publicKey } =
-      await createKeyPairFromPrivateKeyBytes(seed);
+    const sessionSecret = getBase58Decoder().decode(
+      crypto.getRandomValues(new Uint8Array(32))
+    );
+    const { publicKey } = await this.keyPairFromSecret(sessionSecret);
     const sessionPublicKey = await getAddressFromPublicKey(publicKey);
     const nonce = getBase58Decoder().decode(
       crypto.getRandomValues(new Uint8Array(16))
     );
     const expiresAt = Date.now() + SESSION_TTL_MS;
     return {
-      session: { sessionPublicKey, nonce, privateKey },
-      expiresAt,
+      stored: {
+        walletAddress: wallet,
+        sessionPublicKey,
+        sessionSecret,
+        nonce,
+        expiresAt,
+      },
       message: this.commentSessionMessage(
         wallet,
         sessionPublicKey,
@@ -199,6 +227,69 @@ export class PredictionsAuth {
         expiresAt
       ),
     };
+  }
+
+  public static async toCommentSession(
+    stored: StoredCommentSession
+  ): Promise<CommentSession> {
+    const { privateKey } = await this.keyPairFromSecret(stored.sessionSecret);
+    return {
+      sessionPublicKey: stored.sessionPublicKey,
+      nonce: stored.nonce,
+      privateKey,
+    };
+  }
+
+  public static isSessionUsable(
+    stored: Pick<StoredCommentSession, "expiresAt">,
+    now: number
+  ): boolean {
+    return stored.expiresAt - SESSION_EXPIRY_MARGIN_MS > now;
+  }
+
+  public static loadCommentSession(
+    wallet: string
+  ): StoredCommentSession | null {
+    const path = this.sessionPath(wallet);
+    if (!existsSync(path)) {
+      return null;
+    }
+    try {
+      const stored = JSON.parse(
+        readFileSync(path, "utf-8")
+      ) as StoredCommentSession;
+      return stored.walletAddress === wallet &&
+        stored.sessionSecret &&
+        this.isSessionUsable(stored, Date.now())
+        ? stored
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  public static saveCommentSession(stored: StoredCommentSession): void {
+    const path = this.sessionPath(stored.walletAddress);
+    mkdirSync(join(Config.CONFIG_DIR, "auth"), {
+      recursive: true,
+      mode: 0o700,
+    });
+    writeFileSync(path, JSON.stringify(stored), { mode: 0o600 });
+    chmodSync(path, 0o600);
+  }
+
+  public static clearCommentSession(wallet: string): void {
+    rmSync(this.sessionPath(wallet), { force: true });
+  }
+
+  private static sessionPath(wallet: string): string {
+    return join(Config.CONFIG_DIR, "auth", `predict-comments-${wallet}.json`);
+  }
+
+  private static keyPairFromSecret(secret: string): Promise<CryptoKeyPair> {
+    return createKeyPairFromPrivateKeyBytes(
+      new Uint8Array(getBase58Encoder().encode(secret))
+    );
   }
 
   public static async signWithSession(
