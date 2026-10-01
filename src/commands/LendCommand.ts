@@ -311,7 +311,7 @@ export class LendCommand {
         depositedAmount,
         depositedUsd,
         positionAmount,
-        positionUsd: positionAmount * price,
+        positionUsd: positionAmount === null ? null : positionAmount * price,
         apyPct,
         signature,
       });
@@ -325,10 +325,7 @@ export class LendCommand {
           label: "Deposited",
           value: `${depositedAmount} ${lendToken.asset.symbol} (${Output.formatDollar(depositedUsd)})`,
         },
-        {
-          label: "Position",
-          value: `${this.formatAmount(positionAmount)} ${lendToken.asset.symbol} (${Output.formatDollar(positionAmount * price)})`,
-        },
+        this.positionRow(positionAmount, lendToken),
         { label: "APY", value: Output.formatPercentageChange(apyPct) },
         { label: "Tx Signature", value: signature },
       ],
@@ -438,7 +435,7 @@ export class LendCommand {
         withdrawnAmount,
         withdrawnUsd,
         positionAmount,
-        positionUsd: positionAmount * price,
+        positionUsd: positionAmount === null ? null : positionAmount * price,
         apyPct,
         signature,
       });
@@ -452,10 +449,7 @@ export class LendCommand {
           label: "Withdrawn",
           value: `${withdrawnAmount} ${lendToken.asset.symbol} (${Output.formatDollar(withdrawnUsd)})`,
         },
-        {
-          label: "Position",
-          value: `${this.formatAmount(positionAmount)} ${lendToken.asset.symbol} (${Output.formatDollar(positionAmount * price)})`,
-        },
+        this.positionRow(positionAmount, lendToken),
         { label: "APY", value: Output.formatPercentageChange(apyPct) },
         { label: "Tx Signature", value: signature },
       ],
@@ -628,23 +622,39 @@ export class LendCommand {
     return LendTx.compile(signer, ixs);
   }
 
+  // Runs after the transaction has landed, so a failed lookup must not hide
+  // its signature: the position is then reported as null.
   private static async fetchPositionAmount(
     address: string,
     lendToken: LendToken,
     market: LendMarket
-  ): Promise<number> {
-    const positions = await LendClient.getPositions(address, market);
-    const position = positions.find(
-      (p) => p.token.address === lendToken.address
-    );
-    return position
-      ? Number(
-          NumberConverter.fromChainAmount(
-            position.underlyingAssets,
-            lendToken.asset.decimals
+  ): Promise<number | null> {
+    try {
+      const positions = await LendClient.getPositions(address, market);
+      const position = positions.find(
+        (p) => p.token.address === lendToken.address
+      );
+      return position
+        ? Number(
+            NumberConverter.fromChainAmount(
+              position.underlyingAssets,
+              lendToken.asset.decimals
+            )
           )
-        )
-      : 0;
+        : 0;
+    } catch {
+      return null;
+    }
+  }
+
+  private static positionRow(amount: number | null, lendToken: LendToken) {
+    return {
+      label: "Position",
+      value:
+        amount === null
+          ? "unavailable (lookup failed)"
+          : `${this.formatAmount(amount)} ${lendToken.asset.symbol} (${Output.formatDollar(amount * Number(lendToken.asset.price))})`,
+    };
   }
 
   private static tokenInfo(lt: LendToken) {

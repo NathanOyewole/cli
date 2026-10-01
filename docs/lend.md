@@ -90,7 +90,7 @@ jup lend earn deposit --market ethena --token PYUSD --amount 100
   "token": { "id": "EPjF...USDC", "symbol": "USDC", "decimals": 6 },
   "depositedAmount": "100", // human-readable amount just deposited
   "depositedUsd": 100.00, // USD value of deposit
-  "positionAmount": 1125.30, // total position after deposit
+  "positionAmount": 1125.30, // total position after deposit (null if the post-trade lookup failed)
   "positionUsd": 1125.30, // total position USD value
   "apyPct": 5.97, // current APY; 5.97 means 5.97%
   "signature": "3dV9...8zG1" // tx signature
@@ -121,7 +121,7 @@ jup lend earn withdraw --token USDC --amount 50 --dry-run
   "token": { "id": "EPjF...USDC", "symbol": "USDC", "decimals": 6 },
   "withdrawnAmount": "50", // human-readable amount just withdrawn
   "withdrawnUsd": 50.00, // USD value of withdrawal
-  "positionAmount": 975.30, // remaining position after withdrawal (0 if fully withdrawn)
+  "positionAmount": 975.30, // remaining position after withdrawal (0 if fully withdrawn, null if the post-trade lookup failed)
   "positionUsd": 975.30, // remaining position USD value
   "apyPct": 5.97, // current APY; 5.97 means 5.97%
   "signature": "5YhT...9AKU" // tx signature
