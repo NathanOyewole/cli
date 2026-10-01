@@ -1,6 +1,6 @@
 # Portfolio
 
-Net worth, positions across protocols, spot PnL and airdrops, for one wallet or a group of wallets. All commands are read-only.
+Net worth, positions across protocols, spot PnL and airdrops, for one wallet or a group of wallets. No command sends transactions; only the address book writes (to a local file).
 
 ## Choosing wallets
 
@@ -176,8 +176,11 @@ jup portfolio addressbook remove --name bob                # remove the wallet e
 jup portfolio addressbook remove --name team               # remove the group
 ```
 
-- A group is created when its first wallet is added and removed when it becomes empty
-- `add` and `remove` print the updated book
+- Names may contain letters, digits, `.`, `_` and `-`; they cannot be a Solana address or a built-in demo name (`defi-whale`, `jup-staker`, `airdrop-farmer`, `demo`)
+- `add` validates the address. Re-adding a name with the same address is a no-op; a name already used for a different address or for a group is rejected. `--group` cannot name an existing wallet.
+- A group is created when its first wallet is added and removed when it becomes empty. A group holds at most 15 wallets.
+- `remove --name` accepts a wallet name or a group name; with `--group`, `--name` may also be a raw wallet address
+- `add` and `remove` print the updated book (JSON: `wallets` and `groups` only, without `builtIn`; table: the same view as `list`)
 
 ```js
 // Example JSON response (list):

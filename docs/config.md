@@ -10,12 +10,26 @@ Settings are stored at `~/.config/jup/settings.json`.
 jup config list
 ```
 
+```js
+// Example JSON response:
+{
+  "activeKey": "default",
+  "output": "table", // "table" or "json"
+  "apiKey": "<set>", // redacted; omitted when no API key is set
+  "rpcUrl": "https://..." // omitted when unset (public mainnet RPC is used)
+}
+```
+
+`config set` prints the updated settings in the same shape.
+
 ### Set output format
 
 ```bash
 jup config set --output json
 jup config set --output table
 ```
+
+Override the format for a single command with the global `-f, --format <table|json>` flag, e.g. `jup spot portfolio -f json`.
 
 ### Set active key
 

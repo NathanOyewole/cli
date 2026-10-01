@@ -4,7 +4,7 @@ Stake SOL with the Jupiter validator, natively or as JupSOL, and manage stake ac
 
 Requires: an active key for every command except `info`, `accounts --address` and `rewards`. See [setup](setup.md).
 
-Transactions are built by the Jupiter Stake API (`api.jup.ag/stake/v1`), which works without an API key at a low rate limit. All write commands support `--dry-run`, which returns the unsigned `transaction`.
+Transactions are built by the Jupiter Stake API (`api.jup.ag/stake/v1`), which works without an API key at a low rate limit. All write commands support the global `--dry-run`: nothing is signed or sent, and the JSON adds `dryRun: true` and the unsigned `transaction` with `signature` null.
 
 ## Commands
 
@@ -45,6 +45,7 @@ jup stake accounts --address <wallet-address>
 ```
 
 - Shows each stake account's state and which actions it allows (the jup.ag Manage tab)
+- Looks up the active key's wallet; `--key` or `--address` picks another (mutually exclusive)
 - SOL amounts are human-readable strings
 
 ```js
@@ -83,6 +84,9 @@ jup stake rewards --stake-account <address>
 jup stake rewards --stake-account <address> --limit 20 --before-epoch 1040
 ```
 
+- `--stake-account` is required; `--limit` is a positive integer (default 10, epochs per page); `--before-epoch` is the `next` cursor from a previous call
+- `amount` is in SOL
+
 ```js
 // Example JSON response:
 {
@@ -110,7 +114,9 @@ jup stake native convert --stake-account <address> --amount 2
 - `split` moves `--amount` SOL into a new stake account
 - `merge` merges `--sources` into `--stake-account`; see `mergeableWith` in `stake accounts`
 - `convert` turns a Jupiter-validator stake account into JupSOL. `--amount` converts part of it.
-- Amounts are SOL (`--amount`) or lamports (`--raw-amount`)
+- `deposit` and `split` require exactly one of `--amount` (SOL) or `--raw-amount` (lamports); `convert` takes at most one, and converts the whole account when neither is given
+- `merge --sources` must not include the destination account
+- `--stake-account` and `--sources` must be valid addresses
 
 ```js
 // Example JSON response (split):
@@ -141,6 +147,8 @@ jup stake jupsol withdraw --amount 2 --mode delayed --validator <vote-account>
 - `withdraw` unstakes JupSOL into a stake account, like jup.ag's "To Native Stake" and "Delayed Unstake":
   - `--mode native` (default) gives a stake account at the Jupiter validator, limited by `instantUnstakeCapacity`
   - `--mode delayed` gives a stake account at `--validator` (default Jupiter), with a 0.1% fee. Deactivate and withdraw it to get SOL.
+- `deposit` takes exactly one of `--amount` (SOL) or `--raw-amount` (lamports). `withdraw` takes exactly one of `--amount` (JupSOL) or `--raw-amount` (JupSOL base units).
+- `--validator` only applies to `--mode delayed`; any other `--mode` value is rejected
 - To swap JupSOL to SOL instantly, use `jup spot swap --from JupSOL --to SOL`
 
 ```js
@@ -153,3 +161,5 @@ jup stake jupsol withdraw --amount 2 --mode delayed --validator <vote-account>
   "signature": "3dV98zG..."
 }
 ```
+
+`jupsol withdraw` returns `amount` (JupSOL in) and `outAmount` (SOL staked in the new account), plus `newStakeAccount` for `--mode native` (`action: "withdraw-pool"`) or `voteAccount` for `--mode delayed` (`action: "jupsol-delayed-unstake"`).

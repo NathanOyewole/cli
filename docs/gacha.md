@@ -14,8 +14,8 @@ jup gacha packs --pack pokemon_50
 jup gacha packs --pack pokemon_50 --limit 20
 ```
 
-- Lists the packs shown on jup.ag, cheapest first.
-- `--pack` shows one pack's rarity tiers and a page of the cards it can pull (`--limit`, default 10).
+- Lists the packs shown on jup.ag, cheapest first, as `{ "packs": [...] }` (the pack fields below without `tiers` and `cards`).
+- `--pack` shows one pack's rarity tiers and the first page of the cards it can pull (`--limit`, default 10).
 - `oddsPct` is a percentage (`80` means 80%); `buybackPct` is the share of a card's value paid on instant buyback.
 
 ```js
@@ -51,11 +51,12 @@ jup gacha open --pack pokemon_50 --memo <memo>
 ```
 
 - Buys and opens packs, paying in USDC. `--quantity` buys 1-10 packs (default 1), one transaction each, built and signed right before it is submitted.
-- `--turbo` instantly sells commons back for USDC (`result: "buyback"`).
-- `--gifted` opens packs you were gifted or won (see `gacha collection` for counts). It signs a message instead of a transaction.
-- `--memo` opens a pack that was paid for but not opened. It can't be combined with `--quantity` or `--gifted`.
-- Packs are bought and opened one at a time. If one fails, the command stops, prints the pulls that completed, and exits with code 1. JSON output then adds `failed`: `stage` is `"buy"` (nothing paid for that pack), `"submit"` (signed, payment unknown: check `signature`) or `"open"` (paid, or the gifted pack used, but not opened); `retry` is the `--memo` command for that pack; `packsNotOpened` counts the packs after it, which were not bought and are safe to rerun.
-- `--dry-run` returns the unsigned purchase `transactions` and their `memos` without paying.
+- `--pack` is always required, including with `--memo`.
+- `--turbo` instantly sells commons back for USDC (`result: "buyback"`). It applies to bought and gifted packs, not to `--memo`.
+- `--gifted` opens packs you were gifted or won (see `gacha collection` for counts); `--quantity` can't exceed the count you hold. It signs a message instead of a transaction.
+- `--memo` opens a pack that was paid for but not opened. It can't be combined with `--quantity` or `--gifted`, or with `--dry-run`.
+- Packs are bought and opened one at a time. If one fails, the command stops, prints the pulls that completed, and exits with code 1 (a purchase that fails before anything was signed, with no earlier pulls, just errors). JSON output then adds `failed`: `stage` is `"buy"` (nothing paid for that pack; `memo`, `signature` and `retry` are `null`), `"submit"` (signed, payment unknown: check `signature`) or `"open"` (paid, or the gifted pack used, but not opened); `retry` is the `--memo` command for that pack; `packsNotOpened` counts the packs that were not bought or opened and are safe to rerun (after a `"buy"` failure it includes the failed pack; for `--gifted` they are packs not yet used).
+- `--dry-run` returns `dryRun: true`, `quantity`, `costUsd`, the unsigned purchase `transactions` and their `memos` without paying. With `--gifted` it returns `gifted: true`, `quantity` and `unopened` (your gifted count) instead.
 
 ```js
 // Example JSON response:
@@ -83,7 +84,8 @@ jup gacha gift --pack pokemon_50 --to <wallet-address>
 jup gacha gift --pack pokemon_50 --to <wallet-address> --quantity 5
 ```
 
-- You pay for 1-20 packs; the recipient opens them with `gacha open --gifted`.
+- You pay for 1-20 packs (default 1); the recipient opens them with `gacha open --gifted`. You can't gift to your own wallet.
+- `--dry-run` adds `dryRun: true` and the unsigned `transaction`, with `signature` null.
 
 ```js
 // Example JSON response:
@@ -104,7 +106,8 @@ jup gacha gift --pack pokemon_50 --to <wallet-address> --quantity 5
 jup gacha buyback --mint <card-mint>
 ```
 
-- Sells a recently pulled card back for USDC (`amountUsd`). Only cards still in their buyback window have an offer.
+- Sells a recently pulled card back for USDC (`amountUsd`). Only cards still in their buyback window have an offer, and the card must still be in the signing wallet.
+- `--dry-run` adds `dryRun: true` and the unsigned `transaction`, with `signature` null.
 
 ```js
 // Example JSON response:
@@ -126,7 +129,8 @@ jup gacha collection --address <wallet-address>
 ```
 
 - With no options, uses the active key's wallet. `--key` and `--address` are mutually exclusive.
-- `packs` lists unopened gifted or won packs.
+- `cards` includes listed cards and cards being shipped (`status`); `cardCount` and `insuredValueUsd` cover all of them.
+- `packs` lists unopened gifted or won packs (counts above 0).
 
 ```js
 // Example JSON response:
@@ -230,6 +234,8 @@ jup gacha winners
 jup gacha winners --pack pokemon_50 --epic --limit 50
 ```
 
+- `--pack` limits to one pack; `--epic` keeps only epic pulls. `--limit` defaults to 10 (up to 200).
+
 ```js
 // Example JSON response:
 {
@@ -256,7 +262,7 @@ jup gacha leaderboard --address <wallet-address>
 ```
 
 - Defaults to the current week, else the latest finished one. `seasons` lists every week.
-- `--key` or `--address` adds that wallet's standing as `me`; `claimState` is `locked`, `available`, `delivering`, `delivered` or `retryable`.
+- `--limit` (default 10) caps `entries`. `--key` or `--address` (mutually exclusive) adds that wallet's standing as `me`; `me.entry` is `null` when unranked, and `prize` is `null` for entries without a prize. `claimState` is `locked`, `available`, `delivering`, `delivered` or `retryable`.
 
 ```js
 // Example JSON response:
@@ -293,7 +299,9 @@ jup gacha marketplace --limit 50 --page 2
 ```
 
 - `--sort`: `list-date-desc` (default), `list-date-asc`, `list-price-asc`, `list-price-desc`, `insured-asc`, `insured-desc`, `name-asc`, `name-desc`, `year-asc`, `year-desc`, `newest`, `oldest`
-- `--category` and `--grading-company` take comma-separated lists.
+- `--search` matches card name or mint. `--category` and `--grading-company` take comma-separated lists.
+- `--min-price` / `--max-price` (USD list price) and `--min-grade` / `--max-grade` (numeric grade) filter results. Without `--min-price`, only cards with a list price are returned.
+- `--limit` is results per page (default 20); `--page` defaults to 1.
 - `price` is in `currency` (`USDC`, or `SOL` for some Magic Eden listings).
 
 ```js
@@ -327,7 +335,7 @@ jup gacha marketplace --limit 50 --page 2
 jup gacha card --mint <card-mint>
 ```
 
-Returns the listing fields above plus `year`, `set`, `gradingId`, `frontImage` and `backImage`.
+Returns the listing fields above plus `year`, `set`, `gradingId`, `frontImage` and `backImage`. Works for any card in the catalog, listed or not (`status` and `price` show which).
 
 ### Buy, list and delist
 
@@ -337,9 +345,11 @@ jup gacha list --mint <card-mint> --price 120
 jup gacha delist --mint <card-mint>
 ```
 
-- `buy` pays the current list price.
-- `list` lists a card you own for `--price` USDC, or changes the price if it's already listed (`action: "update"`).
-- `--dry-run` returns the unsigned `transactions` without signing or broadcasting.
+- `buy` pays the current list price. The card must be listed and not already yours.
+- `list` lists a card you own for `--price` USDC (a positive number), or changes the price if it's already listed (`action: "update"`). Cards being shipped can't be listed.
+- `delist` cancels a listing you own.
+- `--dry-run` adds `dryRun: true` and the unsigned `transactions` (`signature` is `null`) without signing or broadcasting.
+- `seller` is only in `buy` output; `list` and `update` have no `seller`, and `delist` has only `action`, `mint`, `name` and `signature`.
 
 ```js
 // Example JSON response:
@@ -364,6 +374,9 @@ Shipping uses a Collector Crypt session: each command signs a sign-in message wi
 jup gacha shipping
 jup gacha shipping --shipment <id>
 ```
+
+- `--shipment` returns just that shipment as `{ "shipment": { ... } }` (same fields as an entry in `shipments`).
+- Uses `--key` or the active key; there is no `--address`.
 
 ```js
 // Example JSON response:
@@ -397,7 +410,8 @@ jup gacha ship --mint <card-mint> <card-mint> --address-id <id>
 - Burns the card NFTs and creates a delivery order to a saved address. Add addresses on jup.ag.
 - Collector Crypt insures shipments over $5,000 automatically; there is no insurance option.
 - If signing or submitting fails after the order is prepared, the error includes the `shipmentId` to give Collector Crypt support.
-- `--dry-run` returns the cost quote only (`shippingUsd`, `insuranceUsd`, `feesUsd`, `totalUsd`): preparing the order would open it with Collector Crypt, so no transaction is built.
+- `--mint` takes one or more mints (duplicates are dropped); the quote includes `cardCount`.
+- `--dry-run` returns `dryRun: true` and the cost quote only (`shippingUsd`, `insuranceUsd`, `feesUsd`, `totalUsd`), with `shipmentId` and `signature` null: preparing the order would open it with Collector Crypt, so no transaction is built.
 
 ```js
 // Example JSON response:

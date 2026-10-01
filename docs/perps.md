@@ -1,6 +1,8 @@
 # Perpetual Futures Trading
 
-Requires: an active key for write commands. Read commands (`markets`, `leaderboard`, the `info`/`markets`/`orderbook`/`history` reads of `jlp`, `loans`, `jtx`, and `delta-neutral`, and any `positions`/`history`/`stats` with `--address`) need none. See [setup](setup.md).
+Requires: an active key for write commands. Read commands (`markets`, `leaderboard`, `jlp info`, `loans info`, `jtx markets`/`orderbook`, `delta-neutral info`/`history`, and any wallet read (`positions`, `history`, `stats`) with `--address`) need none. See [setup](setup.md).
+
+Every write command accepts the global `--dry-run`: it builds and previews the transaction without signing or submitting. In JSON the response gains `"dryRun": true`, `signature` is `null`, and the unsigned base64 `transaction` is included (`transactions` for `close --position all` and `close --order expired`).
 
 ## Markets
 
@@ -8,7 +10,7 @@ The JLP pool markets are **SOL**, **BTC**, and **ETH**. Collateral can be deposi
 
 ## Transaction outcomes
 
-Pool-market writes (`open`, `set`, `close`) are co-signed and sent by a keeper; the CLI then waits for the transaction to confirm on-chain and exits non-zero if it failed. If a submission times out or the server errors, the transaction may still have been sent: the error starts with `Outcome unknown` and names the signature. Check `jup perps positions` (or `jup perps jtx positions`) or the signature on an explorer before retrying.
+Pool-market writes (`open`, `set`, `close`, except `close --order expired`) are co-signed and sent by a keeper; the CLI then waits for the transaction to confirm on-chain and exits non-zero if it failed. If a submission times out or the server errors, the transaction may still have been sent: the error starts with `Outcome unknown` and names the signature. Check `jup perps positions` (or `jup perps jtx positions`) or the signature on an explorer before retrying.
 
 ## Commands
 
@@ -21,7 +23,7 @@ jup perps positions --address <wallet-address>
 ```
 
 - Shows open positions with TP/SL details, and pending limit orders
-- With no options, uses the active key's wallet
+- With no options, uses the active key's wallet; `--key` and `--address` are mutually exclusive
 
 ```js
 // Example JSON response:
@@ -75,11 +77,12 @@ jup perps history --after 2026-03-01 --before 2026-03-15
 # Limit results (default: 20)
 jup perps history --limit 5
 
-# Export the full trade history as CSV (same file as the web's export)
+# Export the full trade history as CSV (same file as the web's export; ignores the filters and --limit)
 jup perps history --address <wallet-address> --export trades.csv
 ```
 
 - Shows past trades (opens, closes) with PnL and fees
+- `--side` accepts `long` or `short` only; `--action` accepts `Increase` or `Decrease` (case-sensitive)
 - `--after` and `--before` accept date strings (e.g. `2026-03-01`) or UNIX timestamps
 - `pnlUsd` and `pnlPct` are `null` for Increase (open) actions
 
@@ -168,10 +171,12 @@ jup perps open --asset SOL --side long --amount 0.2 --leverage 2 --dry-run
 ```
 
 - `--side` accepts `long`, `short`, `buy` (= long), or `sell` (= short)
+- `--amount` is the collateral deposit in `--input` token units (not USD)
 - `--input` defaults to SOL; accepts SOL, BTC, ETH, or USDC
 - `--slippage` defaults to 200 (2%); set in basis points
-- `--tp` and `--sl` cannot be combined with `--limit`
-- `--dry-run` previews the order without signing. The API simulates the transaction, returning entry price, size, leverage, liquidation price, and fees. JSON response includes the unsigned base64 `transaction`.
+- `--asset` must be SOL, BTC, or ETH; other markets error with a pointer to `jup perps jtx open`
+- `--tp` and `--sl` cannot be combined with `--limit` (use `jup perps set` once the order fills); they pay out in the `--input` token
+- `--dry-run` previews the order without signing. The API simulates the transaction, returning entry price, size, leverage, liquidation price, and fees.
 
 ```js
 // Example JSON response (market order):
@@ -231,10 +236,11 @@ jup perps set --position <pubkey> --tp 100 --sl 70 --dry-run
 ```
 
 - Get the `positionPubkey` or `orderPubkey` from `jup perps positions`
+- Pass exactly one of `--position` or `--order`. `--order` requires `--limit`; `--position` requires `--tp`, `--sl`, `--add-collateral`, or `--remove-collateral`. `--size` requires `--tp` or `--sl`. `--add-collateral` and `--remove-collateral` are mutually exclusive and can't be combined with `--tp`, `--sl`, or `--order`.
 - Without `--size`, `--tp`/`--sl` update the whole-position TP/SL if one exists, otherwise create it. With `--size`, a new partial TP/SL is always created; a position can hold several, up to a server limit (the error says how many). `--size` can't exceed the position size; 99% or more of it closes the whole position size, as on the web.
-- `--add-collateral` and `--remove-collateral` keep the position size unchanged. `--input`/`--receive` default to the position's collateral token. Amounts outside the server's per-position limits are rejected with the allowed range.
+- `--add-collateral` and `--remove-collateral` keep the position size unchanged. `--add-collateral` is in `--input` token units, `--remove-collateral` in USD. `--input`/`--receive` default to the position's collateral token. `--slippage` (default 200 bps) applies to collateral changes. Amounts outside the server's per-position limits are rejected with the allowed range.
 - A limit order's size cannot be edited (the web app doesn't allow it either): cancel and re-open instead.
-- `--dry-run` previews the update without signing. JSON response includes the unsigned base64 `transaction` for each update.
+- `--dry-run` previews the update without signing. For TP/SL, each entry of `updates` carries its own unsigned `transaction`.
 
 ```js
 // Example JSON response (update limit order):
@@ -274,7 +280,7 @@ jup perps set --position <pubkey> --tp 100 --sl 70 --dry-run
   "leverage": 34.55, // leverage after the change
   "liquidationPriceUsd": 114.27,
   "received": "74.07 USDC", // null when adding; accrued borrow fees are settled first
-  "feeUsd": 225.93, // includes accrued borrow fees settled by the change
+  "feeUsd": 225.93, // includes accrued borrow fees settled by the change (add-collateral: borrow fees plus the open fee)
   "signature": "5YhT...9AKU"
 }
 // add-collateral also returns "depositUsd": the gross amount deposited. Accrued
@@ -309,9 +315,11 @@ jup perps close --order expired
 jup perps close --position <pubkey> --dry-run
 ```
 
+- Pass exactly one of `--position`, `--order`, or `--tpsl`
 - `--receive` defaults to the position's collateral token; must be USDC or the market token (e.g. BTC for a BTC position)
-- `--size` for partial close; omit to close entirely
-- `--dry-run` previews the close without signing, showing PnL, fees, and received amount. JSON response includes the unsigned base64 `transaction`.
+- `--size` for partial close; omit to close entirely. `--size`, `--receive`, and `--slippage` (default 200 bps) apply only to closing a single position
+- `--position all` errors when there are no open positions
+- `--dry-run` previews the close without signing, showing PnL, fees, and received amount.
 
 ```js
 // Example JSON response (close/decrease position):
@@ -349,7 +357,7 @@ jup perps close --position <pubkey> --dry-run
 
 ### JLP: pool info, mint, burn
 
-JLP is the liquidity token of the perps pool; holders earn trading fees. Mint and burn transactions are sent straight to Solana through your RPC (`jup config set --rpc-url <url>`), as the web app does.
+JLP is the liquidity token of the perps pool; holders earn trading fees. `info` lists only the custodies with a non-zero target weight. Mint and burn transactions are sent straight to Solana through your RPC (`jup config set --rpc-url <url>`), as the web app does.
 
 ```bash
 jup perps jlp info
@@ -424,7 +432,8 @@ jup perps loans repay --amount 50
 jup perps loans repay --amount max --withdraw max
 ```
 
-- Amounts are in token units: `--deposit`/`--withdraw` in JLP, `--amount` in USDC.
+- Amounts are in token units: `--deposit`/`--withdraw` in JLP, `--amount` in USDC. `borrow` needs `--deposit`, `--amount`, or both; `repay` needs `--amount`, `--withdraw`, or both.
+- `history --limit` must be a positive integer.
 - The loan is liquidated when LTV reaches `liquidationLtvPct`; `liquidationPriceUsd` is the JLP price at which that happens.
 
 ```js
@@ -499,6 +508,10 @@ jup perps delta-neutral withdraw --amount 50   # USD value, minimum 10
 jup perps delta-neutral withdraw --amount max
 ```
 
+- `history --days` is a positive integer or `all` (default 30)
+- A deposit above the vault's remaining TVL cap is rejected
+- `withdraw` below the minimum is rejected unless it covers your whole balance; an `--amount` at or above your balance withdraws everything, like `max`
+
 ```js
 // Example JSON response (info):
 {
@@ -556,6 +569,10 @@ jup perps delta-neutral withdraw --amount max
 
 Weekly rankings for the SOL, ETH, and BTC markets (weeks run Monday to Sunday UTC).
 
+- `--asset` defaults to SOL, `--year` to the current year (UTC), `--week` to `current` (or 1-53)
+- `leaderboard --sort` is `volume` (default) or `pnl`; `--limit` defaults to 20 and the API returns at most 50 traders
+- `stats` takes `--key` or `--address` (default: the active key's wallet)
+
 ```bash
 # Top traders this week, ranked by volume (the web's default)
 jup perps leaderboard --asset BTC
@@ -602,11 +619,11 @@ jup perps stats --address <wallet-address> --asset ETH --week current
 
 ### Orderbook (JTX) markets: JUP, HYPE, ZEC, SPCX, SNDK, SKHYNIX
 
-Jupiter's orderbook perps run on a separate venue. They live under `jup perps jtx` because they work differently from the SOL/BTC/ETH pool markets: collateral is always USDC and held in an isolated account per market, positions are identified by market (not a pubkey), orders have IDs, and there is no TP/SL. `jup perps open --asset JUP` points here.
+Jupiter's orderbook perps run on a separate venue. They live under `jup perps jtx` because they work differently from the SOL/BTC/ETH pool markets: collateral is always USDC and held in an isolated account per market, positions are identified by market (not a pubkey), orders have IDs, and there is no TP/SL. `jup perps open --asset JUP` errors with a pointer here, and `jup perps jtx` rejects SOL, BTC, and ETH the other way.
 
 Orders, cancels, and collateral moves are cross-chain intents: the API builds a Solana transaction, you sign it, and it is submitted to the JTX execute endpoint. After submission the CLI waits for the outcome, as the web does, and exits non-zero if it can't confirm it:
 
-- Market orders succeed only once order history shows a fill. An order cancelled without a fill fails, and so does one not seen within 20 seconds (the error names the signature).
+- Market orders succeed only once order history shows a fill. An order cancelled without a fill fails, and so does one (or a cancel) not confirmed within 20 seconds (the error names the signature).
 - Limit orders succeed once they rest in the book or show in history.
 - Cancels (`close --order`) succeed once the order leaves the open orders, and fail if it filled first.
 - Collateral moves (`set`) wait up to 2 minutes for JTX to execute the intent the Solana transaction opened. If the transaction landed but the intent hasn't executed yet, `status` is `"pending"`.
@@ -615,9 +632,9 @@ Opening positions is a private beta: the wallet needs at least 69 JUP staked wit
 
 ```bash
 jup perps jtx markets
-jup perps jtx orderbook --asset JUP --depth 10
+jup perps jtx orderbook --asset JUP --depth 10   # depth 1-25
 jup perps jtx positions [--key <name> | --address <wallet>]
-jup perps jtx history [--type orders|trades|funding] [--asset JUP] [--limit 20]
+jup perps jtx history [--type orders|trades|funding] [--asset JUP] [--limit 20]   # limit 1-100
 
 # Market order: 10 USDC collateral at 3x (size ~ $30)
 jup perps jtx open --asset JUP --side long --amount 10 --leverage 3
@@ -638,10 +655,12 @@ jup perps jtx set --asset JUP --add-collateral 20
 jup perps jtx set --asset JUP --remove-collateral 10
 ```
 
-- `--amount` is USDC collateral (minimum 10). Leverage is 1.1x up to the market's `maxLeverage`.
-- Sizing follows the web: a market order is sized against the live order book, so collateral also covers its price impact, and limit prices round to the tick away from you (down for buys, up for sells).
-- Market orders carry a worst price (`priceUsd`) 1% past the mark; they are rejected when the book is thin (`marketOrders: false` in `markets`), use `--limit` then.
-- Deposits are at least 5 USDC; withdrawals are capped at 95% of the account's free balance.
+- `open` takes exactly one of `--leverage` or `--size`, and adds to an existing position on the same market. `--amount` is USDC collateral (minimum 10). Leverage is 1.1x up to the market's `maxLeverage`.
+- `close` takes exactly one of `--asset` (with optional `--size` and `--limit`) or `--order`. It errors when there is no open position on that market. Without `--limit` it is a market order.
+- `set` takes exactly one of `--add-collateral` or `--remove-collateral`.
+- Sizing follows the web: a market order is sized against the live order book, so collateral also covers its price impact, and limit prices round to the tick away from you (down for buys, up for sells). Orders outside the market's per-order minimum or maximum quantity/notional are rejected (a full close skips the minimum check).
+- Market orders carry a worst price (`priceUsd`) 1% past the mark (best bid/ask when closing); they are rejected when the book is thin (`marketOrders: false` in `markets`), use `--limit` then.
+- Deposits are at least 5 USDC; withdrawals are capped at 95% of the account's free balance (and always leave 0.01 USDC).
 
 ```js
 // Example JSON response (markets):
@@ -711,7 +730,9 @@ jup perps jtx set --asset JUP --remove-collateral 10
   ]
 }
 
-// Example JSON response (history --type orders; trades and funding return "trades" / "funding" arrays):
+// Example JSON response (history --type orders; trades and funding return "trades" / "funding" arrays
+// with time, asset, side, priceUsd, size, feeUsd, pnlUsd, signature and
+// time, asset, side, size, fundingUsd, fundingRatePct, signature):
 {
   "orders": [
     {
