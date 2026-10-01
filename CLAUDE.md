@@ -34,19 +34,24 @@ bun run ci
 - `PerpsCommand` — `perps positions/markets/open/set/close`
 - `PredictionsCommand` — `predictions events/positions/open/close/history`
 - `SignCommand` — `sign --tx <base64>`
-- `SpotCommand` — `spot tokens/quote/swap/portfolio/transfer/reclaim`
+- `SpotCommand` — `spot tokens/quote/swap/portfolio/history/transfer/reclaim`
 - `SpotLimitCommand` — `spot limit open/orders/history/set/close` (registered under `spot`)
 - `SpotDcaCommand` — `spot dca open/orders/history/close` (registered under `spot`)
+- `SpotDiscoveryCommand` — `spot tokens --list`, `spot pulse/heatmap/alphascan/categories/launchpads/smart-money/stocks` (registered under `spot`)
+- `SpotTokenCommand` — `spot token info/chart/net-volume/holders/traders/txs/dev/pools/about/news`
+- `SpotWatchCommand` — `spot watchlist list/add/remove/use/delete`, `spot tracker list/add/remove/trades/import/export`
 - `UpdateCommand` — `update` (self-update CLI to latest version)
 - `VrfdCommand` — `vrfd check/submit`
 
 **Libraries** (`src/lib/`):
 
 - `Asset` — token metadata (mint addresses, decimals) for SOL, BTC, ETH, USDC; `resolveAsset()` for name lookup
-- `Config` — manages `~/.config/jup/settings.json` (activeKey, output format, API key)
+- `Config` — manages `~/.config/jup/settings.json` (activeKey, output format, API key, RPC URL)
+- `Rpc` — sends signed transactions straight to Solana and confirms them, for flows without a Jupiter execute endpoint
+- `DcaV1` — builds the legacy V1 DCA close transaction client-side
 - `Signer` — loads keypairs from `~/.config/jup/keys/{name}.json`, signs transactions and messages
 - `KeyPair` — generates/recovers keypairs (BIP39 mnemonics, BIP32 derivation)
-- `Output` — renders data as table (via cli-table3) or JSON based on config; also provides display formatters (`formatDollar`, `formatBoolean`, `formatPercentageChange`)
+- `Output` — renders data as table (via cli-table3) or JSON based on config; also provides display formatters (`formatDollar`, `formatCompactDollar`, `formatBoolean`, `formatPercentageChange`)
 - `NumberConverter` — converts between human-readable and on-chain decimal amounts
 - `Swap` — shared swap execution logic used by SpotCommand and LendCommand; manual swap settings and Shield token warnings
 - `TriggerOrder` — pure limit/DCA order logic: intent → payload mapping, target prices (USD, market cap, % from market), expiry/interval parsing, minimums
@@ -54,7 +59,17 @@ bun run ci
 
 **API Clients** (`src/clients/`):
 
-- `DatapiClient` — Jupiter token data/search API, Shield token warnings
+- `TokenFilters` — jup.ag screener filters as CLI options, mapped to datapi params
+- `TokenView` — maps datapi assets to token rows and renders token tables
+- `OptionParsers` — commander argument parsers (positive ints, numbers, lists, timestamps)
+- `Watchlist` — local watchlists in `~/.config/jup/watchlist.json` (web `intel_watchlist_config` schema)
+- `WalletTracker` — local followed wallets in `~/.config/jup/tracker.json` (web tracker schema, Axiom share import/export)
+
+**API Clients** (`src/clients/`):
+
+- `DatapiClient` — Jupiter token data/search API, plus datapi.jup.ag discovery data (lists, gems, heatmap, categories, launchpads, smart money, charts, holders, txs, shield, stocks, tracker trades)
+- `ContentClient` — content-api.jup.ag market briefs (Market Pulse)
+- `IntelClient` — Jupiter Intel AI token description and news (requires an API key)
 - `UltraClient` — Jupiter Ultra swap API (quote + execute)
 - `PerpsClient` — Jupiter Perps API v2 (positions, orders, TP/SL)
 - `LendClient` — Jupiter Lend API (earn tokens, positions, earnings)
@@ -73,6 +88,8 @@ bun run ci
 **Limit/DCA order flow:** TriggerClient auth (challenge → Signer.signMessage → verify) → TriggerClient.checkMints → ensureVault → craftDeposit → Signer.signTransaction → createPriceOrder/createDcaOrder (server broadcasts the deposit)
 
 **Vrfd flow:** VrfdClient.checkEligibility → VrfdClient.craftTxn → Signer.signTransaction → VrfdClient.execute
+
+**Spot discovery flow:** DatapiClient (keyless datapi.jup.ag) → TokenView rows → Output; watchlists and followed wallets persist locally via Watchlist / WalletTracker
 
 ## CLI Conventions
 

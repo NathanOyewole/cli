@@ -238,7 +238,7 @@ export class Swap {
     tokens: Token[]
   ): Promise<TokenWarning[] | null> {
     try {
-      const { warnings } = await DatapiClient.getShield(
+      const warnings = await DatapiClient.getShieldWarnings(
         tokens.map((t) => t.id)
       );
       return tokens.flatMap((t) =>
