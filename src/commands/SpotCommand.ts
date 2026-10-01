@@ -20,6 +20,7 @@ import { Output } from "../lib/Output.ts";
 import { Signer } from "../lib/Signer.ts";
 import { Swap } from "../lib/Swap.ts";
 import { SpotDiscoveryCommand } from "./SpotDiscoveryCommand.ts";
+import { SpotWatchCommand } from "./SpotWatchCommand.ts";
 
 export class SpotCommand {
   public static register(program: Command): void {
@@ -108,6 +109,7 @@ export class SpotCommand {
       .option("--token <token>", "Token symbol or mint address to reclaim")
       .action((opts) => this.reclaim(opts));
     SpotDiscoveryCommand.register(spot);
+    SpotWatchCommand.register(spot);
   }
 
   private static async tokens(
