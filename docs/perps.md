@@ -268,13 +268,15 @@ jup perps set --position <pubkey> --tp 100 --sl 70 --dry-run
   "action": "remove-collateral", // or "add-collateral"
   "positionPubkey": "3qMZ...83tz",
   "collateralUsd": 8487.41, // collateral after the change
-  "collateralDeltaUsd": -300, // negative when removing
+  "collateralDeltaUsd": -300, // net change; negative when removing
   "leverage": 34.55, // leverage after the change
   "liquidationPriceUsd": 114.27,
   "received": "74.07 USDC", // null when adding; accrued borrow fees are settled first
-  "feeUsd": 225.93,
+  "feeUsd": 225.93, // includes accrued borrow fees settled by the change
   "signature": "5YhT...9AKU"
 }
+// add-collateral also returns "depositUsd": the gross amount deposited. Accrued
+// borrow fees come out of it, so collateralDeltaUsd = depositUsd - borrow fees.
 ```
 
 ### Close a position or cancel an order
