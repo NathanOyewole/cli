@@ -24,15 +24,17 @@ bun run ci
 
 ## Architecture
 
-**Entry point:** `src/index.ts` — initializes config, registers 9 command groups with Commander.
+**Entry point:** `src/index.ts` — initializes config, registers 11 command groups with Commander.
 
 **Commands** (`src/commands/`): Static classes that register subcommands. Each delegates to library modules.
 
 - `ConfigCommand` — `config list`, `config set`
+- `GachaCommand` — `gacha packs/open/gift/buyback/collection/activity/verify/winners/leaderboard`; registers `GachaMarketCommand` (`gacha marketplace/card/buy/list/delist`) and `GachaShippingCommand` (`gacha shipping/ship`)
 - `KeysCommand` — `keys list/add/delete/edit/use/solana-import`
 - `LendCommand` — `lend earn tokens/positions/deposit/withdraw`
 - `PerpsCommand` — `perps positions/markets/open/set/close`
 - `PredictionsCommand` — `predictions events/positions/open/close/history`
+- `RewardsCommand` — `rewards campaigns/leaderboard/progress/unclaimed/claim/apply`
 - `SignCommand` — `sign --tx <base64>`
 - `SpotCommand` — `spot tokens/quote/swap/portfolio/history/transfer/reclaim`
 - `SpotLimitCommand` — `spot limit open/orders/history/set/close` (registered under `spot`)
@@ -56,6 +58,8 @@ bun run ci
 - `Swap` — shared swap execution logic used by SpotCommand and LendCommand; manual swap settings and Shield token warnings
 - `TriggerOrder` — pure limit/DCA order logic: intent → payload mapping, target prices (USD, market cap, % from market), expiry/interval parsing, minimums
 - `OrderTokens` — token metadata lookup for order lists (symbols, decimals, UI amounts)
+- `RewardsCampaign` — campaign status/claim-window rules and campaign application validation
+- `Gacha` — maps gacha packs, cards and marketplace responses to CLI output
 
 **API Clients** (`src/clients/`):
 
@@ -76,6 +80,8 @@ bun run ci
 - `PredictionsClient` — Jupiter Predictions API v1 (events, positions, orders, history)
 - `VrfdClient` — Jupiter Token Verification API (eligibility check, payment, execute)
 - `TriggerClient` — Jupiter Trigger API v2 (`trigger-api.jup.ag`: limit + DCA orders, vault, signed-message JWT auth cached in `~/.config/jup/auth/{address}.json`) and legacy V1 limit/DCA order lists
+- `RewardsClient` — Jupiter Rewards API on datapi.jup.ag (campaigns, stats, leaderboards, claims) and remote-api.jup.ag campaign applications
+- `GachaClient` — Jupiter TCG API on tcgapi.jup.ag (packs, pulls, gifts, buyback, leaderboard) and the jup.ag Collector Crypt proxy (marketplace, shipping)
 
 **Spot swap flow:** token search → Swap.execute → UltraClient.getOrder → Signer.signTransaction → UltraClient.postExecute
 
@@ -86,6 +92,14 @@ bun run ci
 **Predictions flow:** PredictionsClient.postOrder → Signer.signTransaction → PredictionsClient.postExecute
 
 **Limit/DCA order flow:** TriggerClient auth (challenge → Signer.signMessage → verify) → TriggerClient.checkMints → ensureVault → craftDeposit → Signer.signTransaction → createPriceOrder/createDcaOrder (server broadcasts the deposit)
+
+**Rewards claim flow:** RewardsClient.getClaimTransaction → Signer.signTransaction → RewardsClient.postClaim (server broadcasts)
+
+**Gacha pack flow:** GachaClient.generatePack → Signer.signTransaction → GachaClient.submitPack → GachaClient.openPack
+
+**Gacha marketplace flow:** GachaClient.buildMarketplaceTx → Signer.signTransaction → GachaClient.broadcast
+
+**Gacha shipping flow:** GachaClient.getShippingNonce → Signer.signMessage → GachaClient.verifyShippingSignIn → bearer-token reads, estimate/prepare → Signer.signTransaction → GachaClient.submitShipping
 
 **Vrfd flow:** VrfdClient.checkEligibility → VrfdClient.craftTxn → Signer.signTransaction → VrfdClient.execute
 

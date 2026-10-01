@@ -2,10 +2,12 @@
 import { Command } from "commander";
 
 import { ConfigCommand } from "./commands/ConfigCommand.ts";
+import { GachaCommand } from "./commands/GachaCommand.ts";
 import { KeysCommand } from "./commands/KeysCommand.ts";
 import { LendCommand } from "./commands/LendCommand.ts";
 import { PerpsCommand } from "./commands/PerpsCommand.ts";
 import { PredictionsCommand } from "./commands/PredictionsCommand.ts";
+import { RewardsCommand } from "./commands/RewardsCommand.ts";
 import { SignCommand } from "./commands/SignCommand.ts";
 import { SpotCommand } from "./commands/SpotCommand.ts";
 import { UpdateCommand } from "./commands/UpdateCommand.ts";
@@ -38,10 +40,12 @@ program
   });
 
 ConfigCommand.register(program);
+GachaCommand.register(program);
 KeysCommand.register(program);
 LendCommand.register(program);
 PerpsCommand.register(program);
 PredictionsCommand.register(program);
+RewardsCommand.register(program);
 SignCommand.register(program);
 SpotCommand.register(program);
 UpdateCommand.register(program);
