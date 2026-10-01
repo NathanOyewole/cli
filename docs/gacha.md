@@ -50,10 +50,11 @@ jup gacha open --pack pokemon_50 --gifted
 jup gacha open --pack pokemon_50 --memo <memo>
 ```
 
-- Buys and opens packs, paying in USDC. `--quantity` buys 1-10 packs, one transaction each.
+- Buys and opens packs, paying in USDC. `--quantity` buys 1-10 packs (default 1), one transaction each, built and signed right before it is submitted.
 - `--turbo` instantly sells commons back for USDC (`result: "buyback"`).
 - `--gifted` opens packs you were gifted or won (see `gacha collection` for counts). It signs a message instead of a transaction.
-- `--memo` opens a pack that was paid for but not opened; the error from a failed open prints the command.
+- `--memo` opens a pack that was paid for but not opened. It can't be combined with `--quantity` or `--gifted`.
+- Packs are bought and opened one at a time. If one fails, the command stops, prints the pulls that completed, and exits with code 1. JSON output then adds `failed`: `stage` is `"buy"` (nothing paid for that pack), `"submit"` (signed, payment unknown: check `signature`) or `"open"` (paid, or the gifted pack used, but not opened); `retry` is the `--memo` command for that pack; `packsNotOpened` counts the packs after it, which were not bought and are safe to rerun.
 - `--dry-run` returns the unsigned purchase `transactions` and their `memos` without paying.
 
 ```js
@@ -70,6 +71,8 @@ jup gacha open --pack pokemon_50 --memo <memo>
       "signature": "5ZQm..."
     }
   ]
+  // Only after a failure:
+  // "failed": { "stage": "open", "memo": "jupiter-...", "signature": "3Lx...", "error": "...", "retry": "jup gacha open --pack pokemon_50 --memo jupiter-...", "packsNotOpened": 1 }
 }
 ```
 
@@ -389,10 +392,11 @@ jup gacha shipping --shipment <id>
 
 ```bash
 jup gacha ship --mint <card-mint> <card-mint> --address-id <id>
-jup gacha ship --mint <card-mint> --address-id <id> --insurance
 ```
 
 - Burns the card NFTs and creates a delivery order to a saved address. Add addresses on jup.ag.
+- Collector Crypt insures shipments over $5,000 automatically; there is no insurance option.
+- If signing or submitting fails after the order is prepared, the error includes the `shipmentId` to give Collector Crypt support.
 - `--dry-run` returns the cost quote only (`shippingUsd`, `insuranceUsd`, `feesUsd`, `totalUsd`): preparing the order would open it with Collector Crypt, so no transaction is built.
 
 ```js

@@ -2,6 +2,7 @@ import {
   getBase58Decoder,
   isAddress,
   type Base64EncodedBytes,
+  type Base64EncodedWireTransaction,
 } from "@solana/kit";
 import chalk from "chalk";
 import type { Command } from "commander";
@@ -12,7 +13,7 @@ import {
   type OpenPackResult,
 } from "../clients/GachaClient.ts";
 import { Config } from "../lib/Config.ts";
-import { Gacha } from "../lib/Gacha.ts";
+import { Gacha, type OpenFailure } from "../lib/Gacha.ts";
 import { NumberConverter } from "../lib/NumberConverter.ts";
 import { Output } from "../lib/Output.ts";
 import { Signer } from "../lib/Signer.ts";
@@ -30,6 +31,17 @@ type Pull = {
 };
 const MAX_GIFT_PACKS = 20;
 
+// Submitting a pack failed after signing, so it may or may not be paid.
+class UncertainPackError extends Error {
+  constructor(
+    message: string,
+    readonly memo: string,
+    readonly signature: string
+  ) {
+    super(message);
+  }
+}
+
 export class GachaCommand {
   public static register(program: Command): void {
     const gacha = program
@@ -45,7 +57,10 @@ export class GachaCommand {
       .command("open")
       .description("Buy and open a pack, or open a gifted one")
       .requiredOption("--pack <code>", "Pack code (e.g. pokemon_50)")
-      .option("--quantity <n>", `Packs to buy (1-${MAX_PACKS_PER_RUN})`, "1")
+      .option(
+        "--quantity <n>",
+        `Packs to buy (1-${MAX_PACKS_PER_RUN}, default 1)`
+      )
       .option("--turbo", "Instantly sell commons back for USDC")
       .option("--gifted", "Open a pack you were gifted or awarded")
       .option("--memo <memo>", "Open an already-bought pack by its memo")
@@ -258,7 +273,7 @@ export class GachaCommand {
 
   private static async open(opts: {
     pack: string;
-    quantity: string;
+    quantity?: string;
     turbo?: boolean;
     gifted?: boolean;
     memo?: string;
@@ -267,8 +282,11 @@ export class GachaCommand {
     if (opts.gifted && opts.memo) {
       throw new Error("--gifted cannot be combined with --memo.");
     }
+    if (opts.memo && opts.quantity !== undefined) {
+      throw new Error("--quantity cannot be combined with --memo.");
+    }
     const quantity = this.parseCount(
-      opts.quantity,
+      opts.quantity ?? "1",
       MAX_PACKS_PER_RUN,
       "--quantity"
     );
@@ -306,38 +324,42 @@ export class GachaCommand {
           unopened,
         });
       }
-      const pulls: Pull[] = [];
-      for (let i = 0; i < quantity; i++) {
-        const challenge = await GachaClient.generateGiftedPackChallenge({
-          publicKey: signer.address,
-          packType: machine.code,
-        });
-        const signature = await signer.signMessage(challenge.messageToSign);
-        const { memo } = await GachaClient.useGiftedPack({
-          publicKey: signer.address,
-          packType: machine.code,
-          nonce: challenge.nonce,
-          ...(opts.turbo && { turbo: true }),
-          signedMessage: challenge.messageToSign,
-          signature: getBase58Decoder().decode(signature),
-        });
-        pulls.push(this.pullFromResult(memo, await GachaClient.openPack(memo)));
-      }
-      return this.printPulls(machine, signer.address, pulls);
-    }
-
-    const purchases = [];
-    for (let i = 0; i < quantity; i++) {
-      purchases.push(
-        await GachaClient.generatePack({
-          playerAddress: signer.address,
-          packType: machine.code,
-          ...(opts.turbo && { turbo: true }),
-        })
+      return this.openEach(
+        machine,
+        signer.address,
+        quantity,
+        true,
+        async () => {
+          const challenge = await GachaClient.generateGiftedPackChallenge({
+            publicKey: signer.address,
+            packType: machine.code,
+          });
+          const signature = await signer.signMessage(challenge.messageToSign);
+          const { memo } = await GachaClient.useGiftedPack({
+            publicKey: signer.address,
+            packType: machine.code,
+            nonce: challenge.nonce,
+            ...(opts.turbo && { turbo: true }),
+            signedMessage: challenge.messageToSign,
+            signature: getBase58Decoder().decode(signature),
+          });
+          return { memo, signature: null };
+        }
       );
     }
 
+    const generate = () =>
+      GachaClient.generatePack({
+        playerAddress: signer.address,
+        packType: machine.code,
+        ...(opts.turbo && { turbo: true }),
+      });
+
     if (Config.dryRun) {
+      const purchases = [];
+      for (let i = 0; i < quantity; i++) {
+        purchases.push(await generate());
+      }
       return this.printDryRun({
         pack: machine.code,
         address: signer.address,
@@ -348,29 +370,74 @@ export class GachaCommand {
       });
     }
 
-    const pulls: Pull[] = [];
-    for (const { memo, transaction } of purchases) {
+    // Each pack is built and signed right before it is submitted so its
+    // blockhash is still fresh.
+    return this.openEach(machine, signer.address, quantity, false, async () => {
+      const { memo, transaction } = await generate();
       const signed = await signer.signTransaction(
         transaction as Base64EncodedBytes
       );
-      const submitted = await GachaClient.submitPack(signed);
+      const signature = Signer.signatureOf(signed);
       try {
-        const pull = this.pullFromResult(
-          memo,
-          await GachaClient.openPack(memo)
-        );
-        pulls.push({
-          ...pull,
-          signature: pull.signature ?? submitted.signature ?? null,
-        });
+        const submitted = await GachaClient.submitPack(signed);
+        return { memo, signature: submitted.signature ?? signature };
       } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `Pack bought (memo ${memo}) but opening failed: ${reason}. Retry with \`jup gacha open --pack ${machine.code} --memo ${memo}\`.`
+        throw new UncertainPackError(
+          await Output.errorMessage(err),
+          memo,
+          signature
         );
       }
+    });
+  }
+
+  // Opens packs one at a time and stops at the first failure, still printing
+  // the pulls that completed so paid packs are never silently lost.
+  private static async openEach(
+    machine: Machine,
+    address: string,
+    quantity: number,
+    gifted: boolean,
+    acquire: () => Promise<{ memo: string; signature: string | null }>
+  ): Promise<void> {
+    const pulls: Pull[] = [];
+    for (let i = 0; i < quantity; i++) {
+      const packsLeft = quantity - i - 1;
+      let pack: { memo: string; signature: string | null };
+      try {
+        pack = await acquire();
+      } catch (err) {
+        if (!(err instanceof UncertainPackError) && pulls.length === 0) {
+          throw err;
+        }
+        return this.printPulls(machine, address, pulls, {
+          stage: err instanceof UncertainPackError ? "submit" : "buy",
+          memo: err instanceof UncertainPackError ? err.memo : null,
+          signature: err instanceof UncertainPackError ? err.signature : null,
+          error: await Output.errorMessage(err),
+          packsLeft:
+            err instanceof UncertainPackError ? packsLeft : packsLeft + 1,
+          gifted,
+        });
+      }
+      try {
+        const pull = this.pullFromResult(
+          pack.memo,
+          await GachaClient.openPack(pack.memo)
+        );
+        pulls.push({ ...pull, signature: pull.signature ?? pack.signature });
+      } catch (err) {
+        return this.printPulls(machine, address, pulls, {
+          stage: "open",
+          memo: pack.memo,
+          signature: pack.signature,
+          error: await Output.errorMessage(err),
+          packsLeft,
+          gifted,
+        });
+      }
     }
-    this.printPulls(machine, signer.address, pulls);
+    this.printPulls(machine, address, pulls);
   }
 
   private static printDryRun(data: {
@@ -409,33 +476,57 @@ export class GachaCommand {
   private static printPulls(
     machine: Machine,
     address: string,
-    pulls: Pull[]
+    pulls: Pull[],
+    failure?: OpenFailure
   ): void {
+    const failed = failure && {
+      stage: failure.stage,
+      memo: failure.memo,
+      signature: failure.signature,
+      error: failure.error,
+      retry: Gacha.retryOpenCommand(machine.code, failure),
+      packsNotOpened: failure.packsLeft,
+    };
+    if (failure) {
+      process.exitCode = 1;
+    }
     if (Output.isJson()) {
-      Output.json({ pack: machine.code, address, pulls });
+      Output.json({
+        pack: machine.code,
+        address,
+        pulls,
+        ...(failed && { failed }),
+      });
       return;
     }
-    Output.table({
-      type: "horizontal",
-      headers: {
-        name: "Card",
-        rarity: "Rarity",
-        value: "Value",
-        result: "Result",
-        signature: "Tx Signature",
-      },
-      rows: pulls.map((p) => ({
-        name: p.card?.name ?? "—",
-        rarity: p.card?.rarity ?? "—",
-        value: Output.formatDollar(p.card?.valueUsd ?? 0, { decimals: 2 }),
-        result:
-          p.result === "buyback"
-            ? `sold for ${Output.formatDollar(p.buybackUsd ?? 0, { decimals: 2 })}`
-            : "kept",
-        signature: p.signature ?? "—",
-      })),
-      maxWidths: { name: 40 },
-    });
+    if (pulls.length > 0) {
+      Output.table({
+        type: "horizontal",
+        headers: {
+          name: "Card",
+          rarity: "Rarity",
+          value: "Value",
+          result: "Result",
+          signature: "Tx Signature",
+        },
+        rows: pulls.map((p) => ({
+          name: p.card?.name ?? "—",
+          rarity: p.card?.rarity ?? "—",
+          value: Output.formatDollar(p.card?.valueUsd ?? 0, { decimals: 2 }),
+          result:
+            p.result === "buyback"
+              ? `sold for ${Output.formatDollar(p.buybackUsd ?? 0, { decimals: 2 })}`
+              : "kept",
+          signature: p.signature ?? "—",
+        })),
+        maxWidths: { name: 40 },
+      });
+    }
+    if (failure) {
+      console.log(
+        `${chalk.red.bold("Error:")} ${Gacha.describeOpenFailure(machine.code, failure)}`
+      );
+    }
   }
 
   private static async buyback(opts: {
@@ -471,7 +562,9 @@ export class GachaCommand {
       const signed = await signer.signTransaction(
         transaction as Base64EncodedBytes
       );
-      signature = (await GachaClient.submitBuyback(signed)).signature ?? null;
+      signature = await this.submitSigned(signed, (tx) =>
+        GachaClient.submitBuyback(tx)
+      );
     }
 
     if (Output.isJson()) {
@@ -499,6 +592,19 @@ export class GachaCommand {
         ...(signature ? [{ label: "Tx Signature", value: signature }] : []),
       ],
     });
+  }
+
+  // The API's signature is optional; the signed transaction's own signature
+  // is the same transaction id.
+  private static async submitSigned(
+    signed: Base64EncodedWireTransaction,
+    submit: (signed: string) => Promise<{ signature?: string }>
+  ): Promise<string> {
+    const signature = Signer.signatureOf(signed);
+    const res = await submit(signed).catch(async (err: unknown) => {
+      throw await Output.unconfirmedTxError(err, signature);
+    });
+    return res.signature || signature;
   }
 
   private static async gift(opts: {
@@ -532,7 +638,9 @@ export class GachaCommand {
       const signed = await signer.signTransaction(
         gift.transaction as Base64EncodedBytes
       );
-      signature = (await GachaClient.submitPack(signed)).signature ?? null;
+      signature = await this.submitSigned(signed, (tx) =>
+        GachaClient.submitPack(tx)
+      );
     }
 
     const costUsd =

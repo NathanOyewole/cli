@@ -59,6 +59,8 @@ describe("Gacha.listing", () => {
 
   test("defaults Magic Eden listings without a currency to SOL", () => {
     expect(Gacha.listingCurrency(undefined, "ME")).toBe("SOL");
+    expect(Gacha.listingCurrency(undefined, "MAGIC_EDEN")).toBe("SOL");
+    expect(Gacha.listingCurrency(undefined, "MAGICEDEN")).toBe("SOL");
     expect(Gacha.listingCurrency("wsol", "CC")).toBe("SOL");
     expect(Gacha.listingCurrency(undefined, "CC")).toBe("USDC");
   });
@@ -163,5 +165,59 @@ describe("Gacha.coerceList", () => {
     expect(Gacha.coerceList([1])).toEqual([1]);
     expect(Gacha.coerceList({ shipments: [2] })).toEqual([2]);
     expect(Gacha.coerceList({ other: [3] })).toEqual([]);
+  });
+});
+
+describe("Gacha open failures", () => {
+  const base = {
+    memo: "jupiter-m2",
+    signature: "5sig",
+    error: "Request timed out.",
+    gifted: false,
+  };
+
+  test("a paid but unopened pack points to --memo", () => {
+    const failure = { ...base, stage: "open" as const, packsLeft: 2 };
+    expect(Gacha.retryOpenCommand("pokemon_50", failure)).toBe(
+      "jup gacha open --pack pokemon_50 --memo jupiter-m2"
+    );
+    expect(Gacha.describeOpenFailure("pokemon_50", failure)).toBe(
+      "Pack jupiter-m2 is paid (signature 5sig) but opening it failed: Request timed out. Open it with `jup gacha open --pack pokemon_50 --memo jupiter-m2`. 2 more pack(s) were not bought, so rerunning with --quantity 2 is safe."
+    );
+  });
+
+  test("a failed submit may still land", () => {
+    const failure = { ...base, stage: "submit" as const, packsLeft: 0 };
+    expect(Gacha.describeOpenFailure("pokemon_50", failure)).toBe(
+      "Submitting pack jupiter-m2 failed: Request timed out. Transaction 5sig may still land; check it before retrying, and if it landed open the pack with `jup gacha open --pack pokemon_50 --memo jupiter-m2`."
+    );
+  });
+
+  test("a failed buy has nothing to retry by memo", () => {
+    const failure = {
+      ...base,
+      stage: "buy" as const,
+      memo: null,
+      signature: null,
+      error: "Sold out",
+      packsLeft: 1,
+    };
+    expect(Gacha.retryOpenCommand("pokemon_50", failure)).toBeNull();
+    expect(Gacha.describeOpenFailure("pokemon_50", failure)).toBe(
+      "Buying the next pack failed: Sold out. 1 more pack(s) were not bought, so rerunning with --quantity 1 is safe."
+    );
+  });
+
+  test("a used gifted pack keeps its memo", () => {
+    const failure = {
+      ...base,
+      stage: "open" as const,
+      signature: null,
+      gifted: true,
+      packsLeft: 1,
+    };
+    expect(Gacha.describeOpenFailure("pokemon_50", failure)).toBe(
+      "Gifted pack jupiter-m2 is used but opening it failed: Request timed out. Open it with `jup gacha open --pack pokemon_50 --memo jupiter-m2`. 1 more gifted pack(s) were not opened; open them with `jup gacha open --pack pokemon_50 --gifted --quantity 1`."
+    );
   });
 });

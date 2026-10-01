@@ -34,7 +34,6 @@ export class GachaShippingCommand {
         "--address-id <id>",
         "Shipping address ID from `jup gacha shipping`"
       )
-      .option("--insurance", "Insure the shipment")
       .option("--key <name>", "Key to use for signing")
       .action((opts) => this.ship(opts));
   }
@@ -157,7 +156,6 @@ export class GachaShippingCommand {
   private static async ship(opts: {
     mint: string[];
     addressId: string;
-    insurance?: boolean;
     key?: string;
   }): Promise<void> {
     const mints = [...new Set(opts.mint)];
@@ -198,22 +196,27 @@ export class GachaShippingCommand {
     }
 
     const prepared = await GachaClient.prepareShipping(
-      {
-        nftAddresses: mints,
-        shippingAddressId: opts.addressId,
-        ...(opts.insurance && { insurance: true }),
-      },
+      { nftAddresses: mints, shippingAddressId: opts.addressId },
       token
     );
-    const signed = [];
-    for (const tx of prepared.transactions) {
-      signed.push(await signer.signTransaction(tx as Base64EncodedBytes));
+    // A prepared shipment is an open order with Collector Crypt; its ID is what
+    // support needs if anything after this point fails.
+    const shipmentId = prepared.outboundShipmentId;
+    let res: { id: string; status?: string };
+    try {
+      if (!prepared.transactions?.length) {
+        throw new Error("No transactions to sign.");
+      }
+      const signed = [];
+      for (const tx of prepared.transactions) {
+        signed.push(await signer.signTransaction(tx as Base64EncodedBytes));
+      }
+      res = await GachaClient.submitShipping(shipmentId, signed, token);
+    } catch (err) {
+      throw new Error(
+        `${await Output.errorMessage(err)} (shipment ${shipmentId})`
+      );
     }
-    const res = await GachaClient.submitShipping(
-      prepared.outboundShipmentId,
-      signed,
-      token
-    );
 
     if (Output.isJson()) {
       Output.json({
@@ -221,14 +224,14 @@ export class GachaShippingCommand {
         addressId: opts.addressId,
         ...quote,
         totalUsd: prepared.totalCost ?? quote.totalUsd,
-        shipmentId: res.id ?? prepared.outboundShipmentId,
+        shipmentId: res.id ?? shipmentId,
         status: res.status ?? null,
       });
       return;
     }
     this.printQuote(mints, quote);
     console.log(
-      `Shipment ${res.id ?? prepared.outboundShipmentId}: ${res.status ?? "submitted"}`
+      `Shipment ${res.id ?? shipmentId}: ${res.status ?? "submitted"}`
     );
   }
 

@@ -188,15 +188,20 @@ export class GachaMarketCommand {
     let signature: string | null = null;
     for (const tx of transactions) {
       const signed = await signer.signTransaction(tx as Base64EncodedBytes);
+      const localSignature = Signer.signatureOf(signed);
       const res = await GachaClient.broadcast({
         wallet: signer.address,
         signedTransaction: signed,
         nftAddress: mint,
+      }).catch(async (err: unknown) => {
+        throw await Output.unconfirmedTxError(err, localSignature);
       });
       if (res.success === false) {
-        throw new Error(res.message ?? "Transaction failed to broadcast.");
+        throw new Error(
+          `${res.message ?? "Transaction failed to broadcast."} (signature ${localSignature})`
+        );
       }
-      signature = res.signature ?? signature;
+      signature = res.signature || localSignature;
     }
     return signature;
   }
