@@ -181,8 +181,10 @@ export class RewardsCommand {
       },
       rows: rows.map((c) => ({
         ...c,
-        pool: Output.formatDollar(c.poolUsd ?? 0),
-        remaining: Output.formatDollar(c.remainingPoolUsd ?? 0),
+        pool: Output.formatDollar(c.poolUsd ?? 0, { decimals: 0 }),
+        remaining: Output.formatDollar(c.remainingPoolUsd ?? 0, {
+          decimals: 0,
+        }),
         endsAt: this.formatDate(c.endsAt),
       })),
       maxWidths: { title: 40 },
