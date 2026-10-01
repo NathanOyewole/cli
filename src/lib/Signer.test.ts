@@ -4,11 +4,14 @@ import {
   createTransactionMessage,
   getBase64Codec,
   getBase64EncodedWireTransaction,
+  getPublicKeyFromAddress,
   getTransactionCodec,
   setTransactionMessageFeePayer,
   setTransactionMessageLifetimeUsingBlockhash,
   type Base64EncodedBytes,
   type Blockhash,
+  type SignatureBytes,
+  verifySignature,
 } from "@solana/kit";
 import { describe, expect, test } from "bun:test";
 
@@ -57,5 +60,24 @@ describe("signTransaction", () => {
     expect(wrongSigner.signTransaction(unsignedTx)).rejects.toThrow(
       "Attempted to sign a transaction with an address that is not a signer for it"
     );
+  });
+});
+
+describe("signMessage", () => {
+  test("returns an ed25519 signature of the UTF-8 message", async () => {
+    const signer = await Signer.generate();
+    const message = "Sign in to Jupiter";
+
+    const signature = await signer.signMessage(message);
+    const publicKey = await getPublicKeyFromAddress(address(signer.address));
+
+    expect(signature.length).toBe(64);
+    expect(
+      await verifySignature(
+        publicKey,
+        signature as SignatureBytes,
+        new TextEncoder().encode(message)
+      )
+    ).toBe(true);
   });
 });
