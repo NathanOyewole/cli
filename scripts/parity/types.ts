@@ -5,6 +5,9 @@ export type ParityCase =
       kind: "read";
       args: string[];
       wallet?: string;
+      // Run with a freshly generated local key instead of a watch-only one,
+      // for reads that need a real wallet signature (signed-message auth).
+      signer?: "generated";
       expect?: (json: unknown) => boolean;
     }
   | {

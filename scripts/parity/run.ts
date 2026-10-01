@@ -47,6 +47,21 @@ function makeHome(wallet: string): string {
   return home;
 }
 
+const GENERATED = "generated";
+
+function makeGeneratedHome(): string {
+  const home = mkdtempSync(join(tmpdir(), "jup-parity-"));
+  const add = runCli(home, ["keys", "add", "parity"]);
+  if (add.status !== 0) {
+    throw new Error(`could not generate a parity key: ${add.stderr}`);
+  }
+  writeFileSync(
+    join(home, ".config", "jup", "settings.json"),
+    JSON.stringify({ activeKey: "parity", output: "json" })
+  );
+  return home;
+}
+
 function runCli(home: string, args: string[]) {
   const { status, stdout, stderr } = spawnSync("node", [CLI, ...args], {
     env: { ...process.env, HOME: home },
@@ -131,7 +146,10 @@ async function simulate(tx: string): Promise<string | null> {
 const homes = new Map<string, string>();
 function homeFor(wallet: string): string {
   if (!homes.has(wallet)) {
-    homes.set(wallet, makeHome(wallet));
+    homes.set(
+      wallet,
+      wallet === GENERATED ? makeGeneratedHome() : makeHome(wallet)
+    );
   }
   return homes.get(wallet)!;
 }
@@ -140,7 +158,10 @@ async function check(c: ParityCase): Promise<[Verdict, string]> {
   if (c.kind === "unsupported") {
     return ["UNSUPPORTED", c.reason];
   }
-  const wallet = c.wallet ?? DEFAULT_WALLET;
+  const wallet =
+    c.kind === "read" && c.signer === GENERATED
+      ? GENERATED
+      : (c.wallet ?? DEFAULT_WALLET);
   const home = homeFor(wallet);
   const args = c.args.map((a) => a.replaceAll(WALLET, wallet));
   const flags = c.kind === "tx" ? ["-f", "json", "--dry-run"] : ["-f", "json"];
