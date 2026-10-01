@@ -31,7 +31,9 @@ export class PerpsCommand {
       .action((opts) => this.positions(opts));
     perps
       .command("markets")
-      .description("List all perpetual markets with current prices")
+      .description(
+        "List JLP-pool markets with prices, fees, borrow rates, and liquidity"
+      )
       .action(() => this.markets());
     perps
       .command("open")
