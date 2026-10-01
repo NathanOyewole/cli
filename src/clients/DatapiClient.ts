@@ -110,6 +110,17 @@ type GetSpotHistoryResponse = {
   next: string | null;
 };
 
+export type ShieldWarning = {
+  type: string;
+  message: string;
+  severity: "info" | "warning" | "critical";
+  source?: string | null | undefined;
+};
+
+type GetShieldResponse = {
+  warnings: Record<string, ShieldWarning[]>;
+};
+
 export class DatapiClient {
   static readonly #ky = ClientConfig.ky.extend({
     prefixUrl: ClientConfig.host,
@@ -184,5 +195,13 @@ export class DatapiClient {
       throw new Error(`Token not found: ${input}`);
     }
     return token;
+  }
+
+  public static async getShield(mints: string[]): Promise<GetShieldResponse> {
+    return this.#datapi
+      .get("v1/shield", {
+        searchParams: { mints: mints.join(","), isJupiter: true },
+      })
+      .json();
   }
 }

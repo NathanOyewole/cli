@@ -2,7 +2,17 @@ import type { Address, Base64EncodedBytes } from "@solana/kit";
 
 import { ClientConfig } from "./ClientConfig.ts";
 
-type GetOrderRequest = {
+export type SwapSettings = {
+  swapMode?: "ExactIn" | "ExactOut" | undefined;
+  priorityFeeLamports?: string | undefined;
+  jitoTipLamports?: string | undefined;
+  broadcastFeeType?: "maxCap" | "exactFee" | undefined;
+  useWsol?: boolean | undefined;
+  excludeDexes?: string | undefined;
+  excludeRouters?: string | undefined;
+};
+
+type GetOrderRequest = SwapSettings & {
   inputMint: string;
   outputMint: string;
   amount: string;
