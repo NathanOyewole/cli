@@ -298,6 +298,35 @@ const withLoan = (match: (p: LoanPosition) => boolean) => async () => {
   throw new Error("no recent loan wallet matches");
 };
 
+// A loan wallet holding enough USDC to repay 1 USDC, so the repay-only quote
+// that sizes `--withdraw max` succeeds.
+const withRepayableLoan = async () => {
+  const history = await get<{ dataList: { walletAddress: string }[] }>(
+    "loans/history?start=0&end=50"
+  );
+  for (const wallet of new Set(history.dataList.map((h) => h.walletAddress))) {
+    const res = await fetch(`${PERPS_API}/loans/repay-withdraw`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        walletAddress: wallet,
+        repayTokenAmount: "1000000",
+        withdrawTokenAmount: "0",
+      }),
+    });
+    const quote = (await res.json()) as {
+      maxWithdrawTokenAmountBeforeWithdraw?: string;
+    };
+    if (
+      res.ok &&
+      BigInt(quote.maxWithdrawTokenAmountBeforeWithdraw ?? 0) > 0n
+    ) {
+      return { WALLET: wallet };
+    }
+  }
+  throw new Error("no recent loan wallet can repay 1 USDC");
+};
+
 const JTX_API = "https://gum-api.jup.net/fe/mainnet-beta/perps";
 const JTX_GATEWAY = "gumhFpP3saWX8arwLx4peMZ6kBBXXbL7RWVuMtCjedY";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -802,6 +831,13 @@ export const cases: ParityCase[] = [
     kind: "tx",
     args: ["perps", "loans", "repay", "--withdraw", "0.1"],
     resolve: withLoan((p) => BigInt(p.maxWithdrawTokenAmount) > 200_000n),
+  },
+  {
+    id: "loans-repay-withdraw-max",
+    feature: "perps-jlp",
+    kind: "tx",
+    args: ["perps", "loans", "repay", "--amount", "1", "--withdraw", "max"],
+    resolve: withRepayableLoan,
   },
   {
     id: "leaderboard",
