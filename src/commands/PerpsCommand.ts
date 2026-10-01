@@ -12,6 +12,8 @@ import { Output } from "../lib/Output.ts";
 import { PerpsTx } from "../lib/PerpsTx.ts";
 import { Signer } from "../lib/Signer.ts";
 import { PerpsCollateral } from "./PerpsCollateral.ts";
+import { PerpsJlpCommand } from "./PerpsJlpCommand.ts";
+import { PerpsLoansCommand } from "./PerpsLoansCommand.ts";
 
 export class PerpsCommand {
   public static register(program: Command): void {
@@ -115,6 +117,8 @@ export class PerpsCommand {
         "Write the wallet's full trade history to a CSV file instead"
       )
       .action((opts) => this.history(opts));
+    PerpsJlpCommand.register(perps);
+    PerpsLoansCommand.register(perps);
   }
 
   private static async positions(opts: {

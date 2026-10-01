@@ -34,7 +34,9 @@ bun run ci
 - `GiftCommand` — `gift create/claim/info/clawback/pending/history`
 - `KeysCommand` — `keys list/add/delete/edit/use/solana-import`
 - `LendCommand` — `lend earn tokens/positions/deposit/withdraw`
-- `PerpsCommand` — `perps positions/markets/open/set/close`
+- `PerpsCommand` — `perps positions/markets/open/set/close/history`; registers the perps subgroups below. `PerpsCollateral` implements `perps set --add-collateral/--remove-collateral`
+- `PerpsJlpCommand` — `perps jlp info/mint/burn`
+- `PerpsLoansCommand` — `perps loans info/positions/history/borrow/repay`
 - `PortfolioCommand` — `portfolio positions/pnl/airdrops`, `portfolio addressbook list/add/remove`
 - `PredictionsCommand` — `predictions events/positions/open/close/history`; registers the predictions subcommand files below
 - `PredictionsAccountCommand` — `predictions orders/claim/leaderboard/profile/pnl/set-username`
@@ -64,6 +66,7 @@ bun run ci
 - `Output` — renders data as table (via cli-table3) or JSON based on config; also provides display formatters (`formatDollar`, `formatCompactDollar`, `formatBoolean`, `formatPercentageChange`)
 - `NumberConverter` — converts between human-readable and on-chain decimal amounts
 - `Swap` — shared swap execution logic used by SpotCommand and LendCommand; manual swap settings and Shield token warnings
+- `PerpsTx` — perps sign helpers: `signAndExecute` (perps-api `/transaction/execute`) and `signAndSend` (straight to RPC via `Rpc`), plus `--key`/`--address` resolution
 - `TriggerOrder` — pure limit/DCA order logic: intent → payload mapping, target prices (USD, market cap, % from market), expiry/interval parsing, minimums
 - `OrderTokens` — token metadata lookup for order lists (symbols, decimals, UI amounts)
 - `RewardsCampaign` — campaign status/claim-window rules and campaign application validation
@@ -89,7 +92,8 @@ bun run ci
 - `ContentClient` — content-api.jup.ag market briefs (Market Pulse)
 - `IntelClient` — Jupiter Intel AI token description and news (requires an API key)
 - `UltraClient` — Jupiter Ultra swap API (quote + execute)
-- `PerpsClient` — Jupiter Perps API v2 (positions, orders, TP/SL)
+- `PerpsClient` — Jupiter Perps API v2 (positions, orders, TP/SL, pool info, collateral limits, expired orders, leaderboard, CSV export)
+- `JlpClient` — Perps API v2 JLP pool (info, mint, burn) and JLP loans
 - `LendClient` — Jupiter Lend API (earn tokens, positions, earnings)
 - `PredictionsClient` — Jupiter Predictions API v1 (events, markets, positions, orders, tickets, claims, history, profiles, leaderboards)
 - `PredictionsArcadeClient` — Predictions API v1 `play/*` (1-minute arcade rounds and bets)
@@ -107,6 +111,8 @@ bun run ci
 **Spot swap flow:** token search → Swap.execute → UltraClient.getOrder → Signer.signTransaction → UltraClient.postExecute
 
 **Perps flow:** PerpsClient.post* → Signer.signTransaction → PerpsClient.postExecute
+
+**JLP / loans / expired-order flow:** JlpClient.post* (or PerpsClient.getExpiredOrders) → Signer.signTransaction → Rpc.sendAndConfirm
 
 **Lend deposit/withdraw flow:** LendClient.getTokens → resolve jlToken → Swap.execute → LendClient.getPositions (updated state)
 

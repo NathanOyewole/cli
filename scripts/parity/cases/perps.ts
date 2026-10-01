@@ -228,6 +228,57 @@ const withPartialTp = async () => {
   };
 };
 
+const JLP_MINT = "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4";
+
+// A JLP holder (from the public holders list) with SOL for fees.
+const withJlpHolder = async () => {
+  const res = await fetch(`https://datapi.jup.ag/v1/holders/${JLP_MINT}`);
+  const { holders } = (await res.json()) as {
+    holders: { address: string; amount: number; solBalanceDisplay: number }[];
+  };
+  // Some large holders are program-owned vaults the API can't build for.
+  for (const h of holders) {
+    if (h.amount < 1000 || h.solBalanceDisplay < 0.05) {
+      continue;
+    }
+    const res = await fetch(`${PERPS_API}/jlp/burn`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        walletAddress: h.address,
+        burnTokenAmount: "10000000",
+        receiveToken: "USDC",
+      }),
+    });
+    if (res.ok) {
+      return { WALLET: h.address };
+    }
+  }
+  throw new Error("no JLP holder the API can build a burn for");
+};
+
+type LoanPosition = {
+  maxBorrowTokenAmount: string;
+  maxWithdrawTokenAmount: string;
+};
+
+// A wallet with a live JLP loan, found through recent public loan activity.
+const withLoan = (match: (p: LoanPosition) => boolean) => async () => {
+  const history = await get<{ dataList: { walletAddress: string }[] }>(
+    "loans/history?start=0&end=50"
+  );
+  const wallets = new Set(history.dataList.map((h) => h.walletAddress));
+  for (const wallet of wallets) {
+    const { dataList } = await get<{ dataList: LoanPosition[] }>(
+      `loans/positions?walletAddress=${wallet}`
+    );
+    if (dataList[0] && match(dataList[0])) {
+      return { WALLET: wallet };
+    }
+  }
+  throw new Error("no recent loan wallet matches");
+};
+
 const hasItems = (key: string) => (json: unknown) =>
   Array.isArray((json as Record<string, unknown>)[key]) &&
   ((json as Record<string, unknown[]>)[key]?.length ?? 0) > 0;
@@ -481,5 +532,72 @@ export const cases: ParityCase[] = [
     ],
     resolve: withPosition(),
     expect: (json) => ((json as { trades?: number }).trades ?? 0) > 0,
+  },
+  {
+    id: "jlp-info",
+    feature: "perps-jlp",
+    kind: "read",
+    args: ["perps", "jlp", "info"],
+    expect: (json) =>
+      typeof (json as { apyPct?: unknown }).apyPct === "number" &&
+      hasItems("custodies")(json),
+  },
+  {
+    id: "jlp-mint",
+    feature: "perps-jlp",
+    kind: "tx",
+    args: ["perps", "jlp", "mint", "--amount", "0.5", "--input", "SOL"],
+  },
+  {
+    id: "jlp-burn",
+    feature: "perps-jlp",
+    kind: "tx",
+    args: ["perps", "jlp", "burn", "--amount", "10", "--receive", "BTC"],
+    resolve: withJlpHolder,
+  },
+  {
+    id: "loans-info",
+    feature: "perps-jlp",
+    kind: "read",
+    args: ["perps", "loans", "info"],
+    expect: (json) =>
+      typeof (json as { borrowAprPct?: unknown }).borrowAprPct === "number",
+  },
+  {
+    id: "loans-positions",
+    feature: "perps-jlp",
+    kind: "read",
+    args: ["perps", "loans", "positions", "--address", WALLET],
+    resolve: withLoan(() => true),
+    expect: hasItems("positions"),
+  },
+  {
+    id: "loans-history",
+    feature: "perps-jlp",
+    kind: "read",
+    args: ["perps", "loans", "history", "--address", WALLET, "--limit", "5"],
+    resolve: withLoan(() => true),
+    expect: hasItems("history"),
+  },
+  {
+    id: "loans-open",
+    feature: "perps-jlp",
+    kind: "tx",
+    args: ["perps", "loans", "borrow", "--deposit", "10", "--amount", "5"],
+    resolve: withJlpHolder,
+  },
+  {
+    id: "loans-borrow-more",
+    feature: "perps-jlp",
+    kind: "tx",
+    args: ["perps", "loans", "borrow", "--amount", "1"],
+    resolve: withLoan((p) => BigInt(p.maxBorrowTokenAmount) > 2_000_000n),
+  },
+  {
+    id: "loans-withdraw",
+    feature: "perps-jlp",
+    kind: "tx",
+    args: ["perps", "loans", "repay", "--withdraw", "0.1"],
+    resolve: withLoan((p) => BigInt(p.maxWithdrawTokenAmount) > 200_000n),
   },
 ];

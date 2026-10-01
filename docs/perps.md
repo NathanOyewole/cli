@@ -1,6 +1,6 @@
 # Perpetual Futures Trading
 
-Requires: an active key for all commands except `positions` (with `--address`), `history` (with `--address`), and `markets`. See [setup](setup.md).
+Requires: an active key for write commands. Read commands (`markets`, `jlp info`, `loans info`, `leaderboard`, and `positions`/`history`/`stats`/`loans positions`/`loans history` with `--address`) need none. See [setup](setup.md).
 
 ## Markets
 
@@ -336,6 +336,144 @@ jup perps close --position <pubkey> --dry-run
 {
   "action": "cancel-limit-order", // or "cancel-tpsl"
   "signature": "4wYb...drLf"
+}
+```
+
+### JLP: pool info, mint, burn
+
+JLP is the liquidity token of the perps pool; holders earn trading fees. Mint and burn transactions are sent straight to Solana through your RPC (`jup config set --rpc-url <url>`), as the web app does.
+
+```bash
+jup perps jlp info
+
+# Mint JLP with a pool token (SOL, ETH, BTC, USDC, JUPUSD; default USDC)
+jup perps jlp mint --amount 100 --input USDC
+jup perps jlp buy --amount 0.5 --input SOL   # alias
+
+# Burn JLP for a pool token (default USDC)
+jup perps jlp burn --amount 20 --receive SOL
+jup perps jlp sell --amount 20               # alias
+```
+
+```js
+// Example JSON response (info):
+{
+  "priceUsd": 4.8358,
+  "aprPct": 9.69,
+  "apyPct": 10.17,
+  "aumUsd": 936106690.12,
+  "aumLimitUsd": 3000000000,
+  "totalSupply": 193577501.856,
+  "aprUpdatedAt": "2026-09-26T12:15:01.000Z",
+  "custodies": [
+    {
+      "asset": "SOL",
+      "mint": "So11111111111111111111111111111111111111112",
+      "amount": 3927573.99, // tokens held by the pool
+      "valueUsd": 451388226.31,
+      "weightPct": 48.21,
+      "targetWeightPct": 47,
+      "utilizationPct": 13.74 // share lent to traders
+    }
+  ]
+}
+
+// Example JSON response (mint):
+{
+  "action": "mint-jlp",
+  "input": "SOL",
+  "inputAmount": "0.5",
+  "jlpAmount": 12.189827, // JLP received
+  "feePct": 0.22,
+  "signature": "4xK2...9zH1"
+}
+
+// Example JSON response (burn):
+{
+  "action": "burn-jlp",
+  "jlpAmount": "100",
+  "receive": "BTC",
+  "receivedAmount": 0.00578388,
+  "feePct": 0.21,
+  "signature": "4xK2...9zH1"
+}
+```
+
+### JLP loans: borrow USDC against JLP
+
+One loan per wallet: JLP is the collateral, USDC is borrowed. Transactions are sent straight to Solana through your RPC.
+
+```bash
+jup perps loans info
+jup perps loans positions [--key <name> | --address <wallet>]
+jup perps loans history [--key <name> | --address <wallet>] [--limit 20]
+
+# Deposit JLP and borrow USDC (either option alone also works)
+jup perps loans borrow --deposit 100 --amount 200
+
+# Repay USDC and/or withdraw JLP ('max' repays everything / withdraws the most allowed)
+jup perps loans repay --amount 50
+jup perps loans repay --amount max --withdraw max
+```
+
+- Amounts are in token units: `--deposit`/`--withdraw` in JLP, `--amount` in USDC.
+- The loan is liquidated when LTV reaches `liquidationLtvPct`; `liquidationPriceUsd` is the JLP price at which that happens.
+
+```js
+// Example JSON response (info):
+{
+  "jlpPriceUsd": 4.8358,
+  "borrowAprPct": 5.83,
+  "availableLiquidityUsd": 68082711.03, // USDC available to borrow
+  "totalSupplyUsd": 275401550.25,
+  "utilizationPct": 61.75,
+  "maxLtvPct": 90, // max loan-to-value when borrowing
+  "liquidationLtvPct": 95,
+  "liquidationPenaltyPct": 2
+}
+
+// Example JSON response (positions):
+{
+  "positions": [
+    {
+      "positionPubkey": "QeVn...7Bm",
+      "collateralAmount": 150000, // JLP
+      "collateralUsd": 725396.03,
+      "debtAmount": 445409.45, // USDC owed
+      "ltvPct": 61.4,
+      "liquidationPriceUsd": 3.1257, // JLP price that triggers liquidation
+      "maxBorrowAmount": 206141.25, // more USDC you can borrow
+      "maxRepayAmount": 449873.47, // USDC that fully repays the loan
+      "maxWithdrawAmount": 47567.59 // JLP you can withdraw now
+    }
+  ]
+}
+
+// Example JSON response (history):
+{
+  "count": 12,
+  "history": [
+    {
+      "time": "2026-10-01T08:22:21.000Z",
+      "type": "Repay", // DepositCollateral, WithdrawCollateral, Borrow, Repay, Liquidation
+      "amount": 100008.44,
+      "token": "USDC",
+      "signature": "4AYu...gAYd8"
+    }
+  ]
+}
+
+// Example JSON response (borrow; repay has repaidAmount/withdrawnAmount instead):
+{
+  "action": "loan-borrow", // or "loan-repay"
+  "depositedAmount": "10", // null if not depositing
+  "borrowedAmount": "5", // null if not borrowing
+  "positionPubkey": "EWUW...C6Ud",
+  "collateralAmount": 10, // JLP after this change
+  "debtAmount": 5, // USDC owed after this change
+  "ltvPct": 10.33,
+  "liquidationPriceUsd": 0.5263,
+  "signature": "5YhT...9AKU"
 }
 ```
 
