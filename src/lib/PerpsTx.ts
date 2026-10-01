@@ -17,7 +17,14 @@ export class PerpsTx {
     const signedTx = await signer.signTransaction(
       serializedTxBase64 as Base64EncodedBytes
     );
-    return PerpsClient.postExecute({ action, serializedTxBase64: signedTx });
+    const { txid } = await PerpsClient.postExecute({
+      action,
+      serializedTxBase64: signedTx,
+    });
+    // The execute endpoint returns once the keeper co-signs and sends; the
+    // web still waits for the transaction to land and checks its error.
+    await Rpc.confirm(txid);
+    return { action, txid };
   }
 
   public static async signAndSend(
