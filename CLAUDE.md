@@ -35,6 +35,8 @@ bun run ci
 - `PredictionsCommand` — `predictions events/positions/open/close/history`
 - `SignCommand` — `sign --tx <base64>`
 - `SpotCommand` — `spot tokens/quote/swap/portfolio/transfer/reclaim`
+- `SpotLimitCommand` — `spot limit open/orders/history/set/close` (registered under `spot`)
+- `SpotDcaCommand` — `spot dca open/orders/history/close` (registered under `spot`)
 - `UpdateCommand` — `update` (self-update CLI to latest version)
 - `VrfdCommand` — `vrfd check/submit`
 
@@ -42,20 +44,23 @@ bun run ci
 
 - `Asset` — token metadata (mint addresses, decimals) for SOL, BTC, ETH, USDC; `resolveAsset()` for name lookup
 - `Config` — manages `~/.config/jup/settings.json` (activeKey, output format, API key)
-- `Signer` — loads keypairs from `~/.config/jup/keys/{name}.json`, signs transactions
+- `Signer` — loads keypairs from `~/.config/jup/keys/{name}.json`, signs transactions and messages
 - `KeyPair` — generates/recovers keypairs (BIP39 mnemonics, BIP32 derivation)
 - `Output` — renders data as table (via cli-table3) or JSON based on config; also provides display formatters (`formatDollar`, `formatBoolean`, `formatPercentageChange`)
 - `NumberConverter` — converts between human-readable and on-chain decimal amounts
-- `Swap` — shared swap execution logic used by SpotCommand and LendCommand
+- `Swap` — shared swap execution logic used by SpotCommand and LendCommand; manual swap settings and Shield token warnings
+- `TriggerOrder` — pure limit/DCA order logic: intent → payload mapping, target prices (USD, market cap, % from market), expiry/interval parsing, minimums
+- `OrderTokens` — token metadata lookup for order lists (symbols, decimals, UI amounts)
 
 **API Clients** (`src/clients/`):
 
-- `DatapiClient` — Jupiter token data/search API
+- `DatapiClient` — Jupiter token data/search API, Shield token warnings
 - `UltraClient` — Jupiter Ultra swap API (quote + execute)
 - `PerpsClient` — Jupiter Perps API v2 (positions, orders, TP/SL)
 - `LendClient` — Jupiter Lend API (earn tokens, positions, earnings)
 - `PredictionsClient` — Jupiter Predictions API v1 (events, positions, orders, history)
 - `VrfdClient` — Jupiter Token Verification API (eligibility check, payment, execute)
+- `TriggerClient` — Jupiter Trigger API v2 (`trigger-api.jup.ag`: limit + DCA orders, vault, signed-message JWT auth cached in `~/.config/jup/auth/{address}.json`) and legacy V1 limit/DCA order lists
 
 **Spot swap flow:** token search → Swap.execute → UltraClient.getOrder → Signer.signTransaction → UltraClient.postExecute
 
@@ -64,6 +69,8 @@ bun run ci
 **Lend deposit/withdraw flow:** LendClient.getTokens → resolve jlToken → Swap.execute → LendClient.getPositions (updated state)
 
 **Predictions flow:** PredictionsClient.postOrder → Signer.signTransaction → PredictionsClient.postExecute
+
+**Limit/DCA order flow:** TriggerClient auth (challenge → Signer.signMessage → verify) → TriggerClient.checkMints → ensureVault → craftDeposit → Signer.signTransaction → createPriceOrder/createDcaOrder (server broadcasts the deposit)
 
 **Vrfd flow:** VrfdClient.checkEligibility → VrfdClient.craftTxn → Signer.signTransaction → VrfdClient.execute
 

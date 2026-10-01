@@ -80,7 +80,7 @@ jup vrfd submit --token <mint-address> --project-twitter @projecthandle --descri
 - [Config](docs/config.md): CLI settings and configurations
 - [Keys](docs/keys.md): Private key management
 - [Sign](docs/sign.md): Sign transactions from `--dry-run`
-- [Spot](docs/spot.md): Spot trading, transfers, token search and portfolio data
+- [Spot](docs/spot.md): Spot trading (swaps, limit orders, DCA), transfers, token search and portfolio data
 - [Perps](docs/perps.md): Perps trading (leveraged longs/shorts)
 - [Lend](docs/lend.md): Lending and yield farming
 - [Predictions](docs/predictions.md): Prediction markets

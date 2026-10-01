@@ -13,7 +13,7 @@ const RPC_URL = process.env.RPC_URL ?? "https://api.mainnet-beta.solana.com";
 const DEFAULT_WALLET =
   process.env.PARITY_WALLET ?? "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9";
 
-type Verdict = "PASS" | "FAIL" | "UNSUPPORTED";
+type Verdict = "PASS" | "UNFUNDED" | "FAIL" | "UNSUPPORTED";
 type Result = { area: string; c: ParityCase; verdict: Verdict; detail: string };
 
 const areaFilter = process.argv.slice(2).filter((a) => !a.startsWith("-"));
@@ -41,6 +41,21 @@ function makeHome(wallet: string): string {
   writeFileSync(
     join(home, ".config", "jup", "settings.json"),
     JSON.stringify({ activeKey: "watch", output: "json" })
+  );
+  return home;
+}
+
+// Auth-gated commands (trigger-api) need a real message signature, so these
+// cases run with a freshly generated, unfunded keypair instead.
+function makeGeneratedKeyHome(): string {
+  const home = mkdtempSync(join(tmpdir(), "jup-parity-gen-"));
+  const { status, stdout, stderr } = runCli(home, ["keys", "add", "generated"]);
+  if (status !== 0) {
+    throw new Error(`keys add failed: ${stdout}${stderr}`);
+  }
+  writeFileSync(
+    join(home, ".config", "jup", "settings.json"),
+    JSON.stringify({ activeKey: "generated", output: "json" })
   );
   return home;
 }
@@ -126,10 +141,14 @@ async function simulate(tx: string): Promise<string | null> {
   return "rpc: rate limited";
 }
 
+const GENERATED = "generated";
 const homes = new Map<string, string>();
 function homeFor(wallet: string): string {
   if (!homes.has(wallet)) {
-    homes.set(wallet, makeHome(wallet));
+    homes.set(
+      wallet,
+      wallet === GENERATED ? makeGeneratedKeyHome() : makeHome(wallet)
+    );
   }
   return homes.get(wallet)!;
 }
@@ -139,7 +158,7 @@ async function check(c: ParityCase): Promise<[Verdict, string]> {
     return ["UNSUPPORTED", c.reason];
   }
   const wallet = c.wallet ?? DEFAULT_WALLET;
-  const home = homeFor(wallet);
+  const home = homeFor(c.key === "generated" ? GENERATED : wallet);
   const args = c.args.map((a) => a.replaceAll(WALLET, wallet));
   const flags = c.kind === "tx" ? ["-f", "json", "--dry-run"] : ["-f", "json"];
   let run = runCli(home, [...flags, ...args]);
@@ -175,9 +194,16 @@ async function check(c: ParityCase): Promise<[Verdict, string]> {
       failures.push(err);
     }
   }
-  return failures.length === 0
-    ? ["PASS", `${txs.length} tx simulated`]
-    : ["FAIL", `simulation: ${failures.join(" | ").slice(0, 400)}`];
+  if (failures.length === 0) {
+    return ["PASS", `${txs.length} tx simulated`];
+  }
+  if (c.expectSimError && failures.every((f) => c.expectSimError!.test(f))) {
+    return [
+      "UNFUNDED",
+      `${txs.length} tx built; simulation failed only for lack of funds: ${failures[0]!.slice(0, 200)}`,
+    ];
+  }
+  return ["FAIL", `simulation: ${failures.join(" | ").slice(0, 400)}`];
 }
 
 async function loadCases(): Promise<{ area: string; cases: ParityCase[] }[]> {
@@ -221,6 +247,6 @@ try {
 
 const count = (v: Verdict) => results.filter((r) => r.verdict === v).length;
 console.log(
-  `\n${count("PASS")} pass, ${count("FAIL")} fail, ${count("UNSUPPORTED")} unsupported, ${results.length} total`
+  `\n${count("PASS")} pass, ${count("UNFUNDED")} unfunded, ${count("FAIL")} fail, ${count("UNSUPPORTED")} unsupported, ${results.length} total`
 );
 process.exit(count("FAIL") > 0 ? 1 : 0);
