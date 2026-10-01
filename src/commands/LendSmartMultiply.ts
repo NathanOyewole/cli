@@ -16,9 +16,6 @@ import {
 
 const ASSOCIATED_TOKEN_PROGRAM = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 const SHARE_DECIMALS = 9;
-const SHARE_SCALE = 10n ** 9n;
-const ORACLE_SCALE = 10n ** 15n;
-const LEVERAGE_SCALE = 1_000_000n;
 
 type Opts = { market: LendMarket; slippage?: string };
 
@@ -89,17 +86,13 @@ export class LendSmartMultiply {
     const ctx = this.ctx(vault);
     const slippageBps = this.slippageBps(p.opts, ctx);
     const { shares, debt } = this.position(p.nft);
-    const oracle = this.oraclePrice(vault);
-    const decimals = vault.borrowToken.token0.decimals;
-    const collateral =
-      (shares * oracle * 10n ** BigInt(decimals)) /
-      (SHARE_SCALE * ORACLE_SCALE);
-    const equity = collateral - debt;
-    if (equity <= 0n) {
-      throw new Error("Position has no equity to lever.");
-    }
-    const m = BigInt(Math.round(p.leverage * Number(LEVERAGE_SCALE)));
-    const targetDebt = ((m - LEVERAGE_SCALE) * equity) / LEVERAGE_SCALE;
+    const targetDebt = LendSmart.targetDebt({
+      oraclePrice: this.oraclePrice(vault),
+      positionShares: shares,
+      debtDecimals: vault.borrowToken.token0.decimals,
+      debt,
+      multiplier: p.leverage,
+    });
     const common = { opts: p.opts, vault, nft: p.nft, signer: p.signer, ctx };
 
     if (targetDebt > debt) {

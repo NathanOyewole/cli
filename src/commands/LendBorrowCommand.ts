@@ -282,6 +282,9 @@ export class LendBorrowCommand {
       liquidationPenaltyPct: Number(vault.liquidationPenalty) / 100,
       maxMultiplier: LendMath.maxMultiplier(vault),
       multiply: vault.metadata.multiply.enabled,
+      // jup.ag Smart Earn: a smart-collateral vault held as a no-debt yield
+      // position.
+      earn: vault.metadata.earn,
       totalSupplyUsd: smartSupply
         ? null
         : amount(vault.totalSupply, vault.supplyToken) * supplyPrice,

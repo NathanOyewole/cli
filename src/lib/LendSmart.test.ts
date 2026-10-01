@@ -206,6 +206,17 @@ describe("LendSmart", () => {
     expect(size(0n, 0n, 1000_000000n, 3)).toBe(1989852739n);
     expect(size(843501012930n, 1001676231n, 0n, 2.5)).toBe(46442727n);
     expect(size(843501012930n, 1001676231n, 250_000000n, 4)).toBe(1840769869n);
+    // (m - 1) x (shares x oracle - debt): 1700.422203 - 1001.676231 = 698.745972.
+    const target = (multiplier: number) =>
+      LendSmart.targetDebt({
+        oraclePrice: 2015910090857826n,
+        positionShares: 843501012930n,
+        debt: 1001676231n,
+        debtDecimals: 6,
+        multiplier,
+      });
+    expect(target(2)).toBe(698745972n);
+    expect(target(2.5)).toBe(1048118958n);
     expect(LendSmart.fullRepayBuffer(2)).toBeCloseTo(1.0012002400480096, 12);
   });
 });

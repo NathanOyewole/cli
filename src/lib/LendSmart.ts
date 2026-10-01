@@ -404,6 +404,26 @@ export class LendSmart {
     return scaled > 0n ? scaled / (MULTIPLIER_SCALE * priceScale) : 0n;
   }
 
+  // Debt that puts an existing position at multiplier m: (m - 1) x equity,
+  // with equity the oracle-priced collateral shares less the debt.
+  public static targetDebt(p: {
+    oraclePrice: bigint;
+    positionShares: bigint;
+    debt: bigint;
+    debtDecimals: number;
+    multiplier: number;
+  }): bigint {
+    const collateral =
+      (p.positionShares * p.oraclePrice * 10n ** BigInt(p.debtDecimals)) /
+      (SHARE_SCALE * ORACLE_SCALE);
+    const equity = collateral - p.debt;
+    if (equity <= 0n) {
+      throw new Error("Position has no equity to lever.");
+    }
+    const m = BigInt(Math.round(p.multiplier * Number(MULTIPLIER_SCALE)));
+    return ((m - MULTIPLIER_SCALE) * equity) / MULTIPLIER_SCALE;
+  }
+
   // fullRepayBuffer: the unwind's withdraw only guarantees its slippage floor
   // while the flashloan must be repaid in full, so pad for both.
   public static fullRepayBuffer(slippageBps: number): number {
