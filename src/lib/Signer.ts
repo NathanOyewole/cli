@@ -1,11 +1,13 @@
 import {
   createKeyPairSignerFromPrivateKeyBytes,
+  createSignableMessage,
   getBase64Codec,
   getBase64EncodedWireTransaction,
   getTransactionCodec,
   partiallySignTransactionWithSigners,
   type Base64EncodedBytes,
   type Base64EncodedWireTransaction,
+  type MessagePartialSigner,
   type TransactionPartialSigner,
 } from "@solana/kit";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -17,14 +19,13 @@ import { Config } from "./Config.ts";
 import { KeychainConfig } from "./KeychainConfig.ts";
 import { KeyPair } from "./KeyPair.ts";
 
+type PartialSigner = TransactionPartialSigner & MessagePartialSigner;
+
 export class Signer {
-  #signer: TransactionPartialSigner;
+  #signer: PartialSigner;
   #keyPair: KeyPair | null;
 
-  private constructor(
-    signer: TransactionPartialSigner,
-    keyPair: KeyPair | null
-  ) {
+  private constructor(signer: PartialSigner, keyPair: KeyPair | null) {
     this.#signer = signer;
     this.#keyPair = keyPair;
   }
@@ -100,5 +101,16 @@ export class Signer {
       decodedTx
     );
     return getBase64EncodedWireTransaction(signedTx);
+  }
+
+  public async signMessage(text: string): Promise<Uint8Array> {
+    const [signatures] = await this.#signer.signMessages([
+      createSignableMessage(text),
+    ]);
+    const signature = signatures?.[this.#signer.address];
+    if (!signature) {
+      throw new Error("Signer returned no signature for the message.");
+    }
+    return signature;
   }
 }
