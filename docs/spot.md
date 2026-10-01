@@ -25,6 +25,15 @@ jup spot tokens --search <mint-address>
 jup spot tokens --search "<mint1>,<mint2>"
 ```
 
+### Browse token lists
+
+```bash
+jup spot tokens --list trending --interval 1h
+jup spot tokens --list stablecoins --interval 30d
+```
+
+`--list` shows jup.ag's market lists (trending, popular, toptraded, organic, recent, stocks, stablecoins, runners, and sectors). See [Spot Discovery](spot-discovery.md) for lists, filters, AlphaScan, Smart Money, token detail, watchlists and the wallet tracker.
+
 ### Get a swap quote
 
 ```bash
