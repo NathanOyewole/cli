@@ -5,16 +5,19 @@ import type { Command } from "commander";
 import {
   JtxPerpsClient,
   type JtxMarket,
-  type JtxOrderHistory,
   type JtxSide,
 } from "../clients/JtxPerpsClient.ts";
 import { Config } from "../lib/Config.ts";
 import {
   assertWithinLimits,
+  cancelOutcome,
+  orderOutcome,
   protectedPrice,
   randomClientOrderId,
   sizeOpenOrder,
   snapDown,
+  snapLimitPrice,
+  type JtxOrderOutcome,
 } from "../lib/JtxOrder.ts";
 import { JupStake } from "../lib/JupStake.ts";
 import { NumberConverter } from "../lib/NumberConverter.ts";
@@ -28,6 +31,8 @@ const MIN_OPEN_COLLATERAL_USD = 10;
 const MIN_DEPOSIT_USD = 5;
 const BETA_MIN_STAKE = 69n * 10n ** BigInt(JupStake.DECIMALS);
 const CONFIRM_TIMEOUT_MS = 20_000;
+const CHECK_COMMAND = "jup perps jtx positions";
+const INTENT_TIMEOUT_MS = 120_000;
 
 const toSide = (side: JtxSide) => (side === "Bid" ? "long" : "short");
 const num = (v: string | number | null | undefined) =>
@@ -504,41 +509,45 @@ export class PerpsJtxCommand {
     const signed = await signer.signTransaction(
       transaction as Base64EncodedBytes
     );
-    const res = await JtxPerpsClient.postExecute(signed);
+    const res = await PerpsTx.submit(signed, CHECK_COMMAND, () =>
+      JtxPerpsClient.postExecute(signed)
+    );
     if (res.status === "Success" && res.code === 0) {
-      return res.signature ?? null;
+      return res.signature ?? PerpsTx.signatureOf(signed);
     }
     if (res.code === -2) {
       throw new Error(`Submission failed: ${res.error ?? "rejected"}`);
     }
-    throw new Error(
-      `Submission outcome unknown (${res.error ?? `code ${res.code}`})${res.signature ? `, tx ${res.signature}` : ""}. Check 'jup perps jtx positions' before retrying.`
+    throw PerpsTx.outcomeUnknown(
+      res.signature ?? PerpsTx.signatureOf(signed),
+      CHECK_COMMAND,
+      res.error ?? `code ${res.code}`
     );
   }
 
-  // Fills happen on the JTX side after the intent lands, so poll the order
-  // history for the client order ID instead of the Solana tx.
-  private static async waitForOrder(
-    wallet: string,
-    symbol: string,
-    clientOrderId: string
-  ): Promise<JtxOrderHistory | null> {
-    const account = await JtxPerpsClient.getTradingAccountPubkey(wallet);
-    const startTime = Math.floor(Date.now() / 1000) - 60;
+  // Polls until the outcome is known; throws if the order was rejected or
+  // the outcome is still unknown at the deadline.
+  private static async waitFor(
+    check: () => Promise<JtxOrderOutcome>,
+    signature: string,
+    what: string
+  ): Promise<{ orderId: string; status: string; filledSize: number }> {
     const deadline = Date.now() + CONFIRM_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      const orders = await JtxPerpsClient.getOrderHistory(account, {
-        symbol,
-        limit: 50,
-        startTime,
-      }).catch(() => []);
-      const order = orders.find((o) => o.clientOrderId === clientOrderId);
-      if (order) {
-        return order;
+      const outcome = await check().catch(
+        (): JtxOrderOutcome => ({ state: "pending" })
+      );
+      if (outcome.state === "done") {
+        return outcome;
+      }
+      if (outcome.state === "failed") {
+        throw new Error(`${outcome.reason} (signature ${signature}).`);
       }
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
-    return null;
+    throw new Error(
+      `Submitted (signature ${signature}), but the ${what} was not confirmed within ${CONFIRM_TIMEOUT_MS / 1000}s. Check '${CHECK_COMMAND}' and 'jup perps jtx history' before retrying.`
+    );
   }
 
   private static async placeOrder(
@@ -547,21 +556,38 @@ export class PerpsJtxCommand {
     summary: Record<string, unknown>
   ): Promise<void> {
     const { transaction } = await JtxPerpsClient.postCreateOrder(order);
+    const startTime = Math.floor(Date.now() / 1000) - 60;
     const signature = await this.submit(signer, transaction);
-    const filled = signature
-      ? await this.waitForOrder(
-          signer.address,
-          order.symbol,
-          order.clientOrderId
-        )
-      : null;
+    let filled: Awaited<ReturnType<typeof this.waitFor>> | null = null;
+    if (signature) {
+      // Fills happen on the JTX side after the intent lands, so poll the
+      // order history for the client order ID instead of the Solana tx.
+      const account = await JtxPerpsClient.getTradingAccountPubkey(
+        signer.address
+      );
+      const isMarket = order.orderType === "market";
+      filled = await this.waitFor(
+        async () =>
+          orderOutcome(
+            { ...order, isMarket, signature, startTime },
+            await JtxPerpsClient.getOrderHistory(account, {
+              symbol: order.symbol,
+              limit: 100,
+              startTime,
+            }),
+            isMarket ? [] : await JtxPerpsClient.getOpenOrders(account)
+          ),
+        signature,
+        isMarket ? "fill" : "order"
+      );
+    }
     const result = {
       ...(Config.dryRun && { dryRun: true }),
       ...summary,
       clientOrderId: order.clientOrderId,
       orderId: filled?.orderId ?? null,
-      status: Config.dryRun ? null : (filled?.status ?? "submitted"),
-      filledSize: filled ? Number(filled.filledSize) : null,
+      status: filled?.status ?? null,
+      filledSize: filled?.filledSize ?? null,
       signature,
       ...(Config.dryRun && { transaction }),
     };
@@ -630,6 +656,10 @@ export class PerpsJtxCommand {
     const leverage = opts.leverage
       ? Number(opts.leverage)
       : Number(opts.size) / collateralUsd;
+    const book =
+      limitPrice === undefined
+        ? await JtxPerpsClient.getOrderbook(market.symbol, 25)
+        : undefined;
     const sizing = sizeOpenOrder({
       market,
       markPrice: market.markPrice,
@@ -637,6 +667,7 @@ export class PerpsJtxCommand {
       collateralUsd,
       leverage,
       limitPrice,
+      book: jtxSide === "Bid" ? book?.asks : book?.bids,
     });
 
     const signer = await Signer.load(opts.key ?? Config.load().activeKey);
@@ -701,12 +732,29 @@ export class PerpsJtxCommand {
         orderId: order.orderId,
       });
       const signature = await this.submit(signer, transaction);
+      const cancelled = signature
+        ? await this.waitFor(
+            async () =>
+              cancelOutcome(
+                order.orderId,
+                await JtxPerpsClient.getOpenOrders(account),
+                await JtxPerpsClient.getOrderHistory(account, {
+                  symbol: order.symbol,
+                  limit: 100,
+                })
+              ),
+            signature,
+            "cancel"
+          )
+        : null;
       if (Output.isJson()) {
         Output.json({
           ...(Config.dryRun && { dryRun: true }),
           action: "cancel-order",
           orderId: order.orderId,
           asset: order.symbol,
+          status: cancelled?.status ?? null,
+          filledSize: cancelled?.filledSize ?? null,
           signature,
           ...(Config.dryRun && { transaction }),
         });
@@ -735,7 +783,7 @@ export class PerpsJtxCommand {
     const quantity = isEntire ? positionSize : requested;
     const price =
       limitPrice !== undefined
-        ? snapDown(limitPrice, market.tickSize)
+        ? snapLimitPrice(limitPrice, closeSide, market.tickSize)
         : protectedPrice(
             closeSide === "Ask" ? market.bestBid : market.bestAsk,
             closeSide,
@@ -826,11 +874,15 @@ export class PerpsJtxCommand {
       amount,
     });
     const signature = await this.submit(signer, transaction);
+    const status = signature
+      ? await this.waitForIntent(signer.address, signature)
+      : null;
     const result = {
       ...(Config.dryRun && { dryRun: true }),
       action: kind === "deposit" ? "add-collateral" : "remove-collateral",
       asset: market.symbol,
       amountUsd: usd,
+      status,
       signature,
       ...(Config.dryRun && { transaction }),
     };
@@ -851,8 +903,57 @@ export class PerpsJtxCommand {
         },
         { label: "Market", value: market.symbol },
         { label: "Amount", value: `${usd} USDC` },
+        ...(status ? [{ label: "Status", value: status }] : []),
         ...(signature ? [{ label: "Tx Signature", value: signature }] : []),
       ],
     });
+    if (status === "pending") {
+      console.log(
+        chalk.yellow(
+          `The transaction landed but JTX has not applied it yet. Check '${CHECK_COMMAND}' shortly.`
+        )
+      );
+    }
+  }
+
+  // The Solana transaction opens a cross-chain intent; the collateral moves
+  // only once JTX executes it (web: useJtxPerpsEditCollateralMutation).
+  private static async waitForIntent(
+    wallet: string,
+    signature: string
+  ): Promise<"executed" | "pending"> {
+    const deadline = Date.now() + INTENT_TIMEOUT_MS;
+    let intentId: string | null = null;
+    while (Date.now() < deadline) {
+      if (!intentId) {
+        const source = await JtxPerpsClient.getOpenedIntent(signature).catch(
+          () => null
+        );
+        if (source?.err) {
+          throw new Error(
+            `Transaction ${signature} failed: ${JSON.stringify(source.err, (_k, v) => (typeof v === "bigint" ? v.toString() : v))}`
+          );
+        }
+        intentId =
+          source?.intent?.user === wallet ? source.intent.intentId : null;
+      }
+      const status = intentId
+        ? await JtxPerpsClient.getIntentStatus(intentId).catch(() => null)
+        : null;
+      if (
+        status?.user === wallet &&
+        status.subaccountId === JtxPerpsClient.SOLANA_SUBACCOUNT_ID &&
+        status.numIntents > 0
+      ) {
+        return "executed";
+      }
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+    if (!intentId) {
+      throw new Error(
+        `Submitted (signature ${signature}), but the transaction was not confirmed within ${INTENT_TIMEOUT_MS / 1000}s. Check '${CHECK_COMMAND}' or the signature on an explorer before retrying.`
+      );
+    }
+    return "pending";
   }
 }

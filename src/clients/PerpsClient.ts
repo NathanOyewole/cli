@@ -1,3 +1,5 @@
+import type { HTTPError } from "ky";
+
 import { resolveAsset } from "../lib/Asset.ts";
 import { ClientConfig } from "./ClientConfig.ts";
 
@@ -277,6 +279,20 @@ export type ExecuteResponse = {
 export class PerpsClient {
   static readonly #ky = ClientConfig.ky.extend({
     prefixUrl: "https://perps-api.jup.ag/v2",
+    hooks: {
+      beforeError: [
+        async (error: HTTPError) => {
+          const body = (await error.response
+            .clone()
+            .json()
+            .catch(() => undefined)) as { message?: string } | undefined;
+          if (body?.message) {
+            error.message = body.message;
+          }
+          return error;
+        },
+      ],
+    },
   });
 
   public static async getMarkets(): Promise<
@@ -488,6 +504,8 @@ export class PerpsClient {
     action: string;
     serializedTxBase64: string;
   }): Promise<ExecuteResponse> {
-    return this.#ky.post("transaction/execute", { json: req }).json();
+    return this.#ky
+      .post("transaction/execute", { json: req, timeout: 60_000 })
+      .json();
   }
 }

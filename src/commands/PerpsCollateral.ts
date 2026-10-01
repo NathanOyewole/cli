@@ -1,4 +1,8 @@
-import { PerpsClient, type Position } from "../clients/PerpsClient.ts";
+import {
+  PerpsClient,
+  type IncreasePositionQuote,
+  type Position,
+} from "../clients/PerpsClient.ts";
 import { resolveAsset } from "../lib/Asset.ts";
 import { Config } from "../lib/Config.ts";
 import { NumberConverter } from "../lib/NumberConverter.ts";
@@ -11,6 +15,7 @@ type Result = {
   positionPubkey: string;
   collateralUsd: number;
   collateralDeltaUsd: number;
+  depositUsd?: number;
   leverage: number;
   liquidationPriceUsd: number;
   received: string | null;
@@ -66,15 +71,12 @@ export class PerpsCollateral {
       collateralUsd: NumberConverter.fromMicroUsd(
         res.quote.positionCollateralUsd
       ),
-      collateralDeltaUsd: NumberConverter.fromMicroUsd(
-        res.quote.collateralUsdDelta
-      ),
+      ...this.depositSummary(position, res.quote),
       leverage: Number(res.quote.leverage),
       liquidationPriceUsd: NumberConverter.fromMicroUsd(
         res.quote.liquidationPriceUsd
       ),
       received: null,
-      feeUsd: NumberConverter.fromMicroUsd(res.quote.openFeeUsd),
       signature: result.txid,
       ...(Config.dryRun && { transaction: res.serializedTxBase64 }),
     });
@@ -138,6 +140,33 @@ export class PerpsCollateral {
     });
   }
 
+  // Accrued borrow fees are settled out of a deposit, so the collateral grows
+  // by less than the amount deposited.
+  public static depositSummary(
+    position: Pick<Position, "collateralUsd">,
+    quote: Pick<
+      IncreasePositionQuote,
+      | "positionCollateralUsd"
+      | "collateralUsdDelta"
+      | "outstandingBorrowFeeUsd"
+      | "openFeeUsd"
+    >
+  ): { collateralDeltaUsd: number; depositUsd: number; feeUsd: number } {
+    return {
+      collateralDeltaUsd: NumberConverter.fromMicroUsd(
+        (
+          BigInt(quote.positionCollateralUsd) - BigInt(position.collateralUsd)
+        ).toString()
+      ),
+      depositUsd: NumberConverter.fromMicroUsd(quote.collateralUsdDelta),
+      feeUsd: NumberConverter.fromMicroUsd(
+        (
+          BigInt(quote.outstandingBorrowFeeUsd) + BigInt(quote.openFeeUsd)
+        ).toString()
+      ),
+    };
+  }
+
   private static assertWithin(
     value: bigint,
     min: bigint,
@@ -171,6 +200,9 @@ export class PerpsCollateral {
               : "Remove Collateral",
         },
         { label: "Position", value: r.positionPubkey },
+        ...(r.depositUsd !== undefined
+          ? [{ label: "Deposit", value: Output.formatDollar(r.depositUsd) }]
+          : []),
         {
           label: "Collateral Change",
           value: Output.formatDollarChange(r.collateralDeltaUsd),

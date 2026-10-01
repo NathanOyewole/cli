@@ -475,6 +475,16 @@ export class PerpsCommand {
         walletAddress: signer.address,
         tpsl: tpsl.length > 0 ? tpsl : undefined,
       });
+      // On an existing position the deposit first settles accrued borrow
+      // fees; when it can't cover them the server quotes no size increase.
+      if (BigInt(res.quote.sizeUsdDelta) === 0n) {
+        const feesDue = Output.formatDollar(
+          NumberConverter.fromMicroUsd(res.quote.outstandingBorrowFeeUsd)
+        );
+        throw new Error(
+          `This order would not increase the position: the ${Output.formatDollar(NumberConverter.fromMicroUsd(res.quote.collateralUsdDelta))} deposit is used up by the ${feesDue} of borrow fees due. Increase --amount, or use 'jup perps set --position ${res.positionPubkey} --add-collateral' to only add collateral.`
+        );
+      }
 
       const result = await PerpsTx.signAndExecute(
         signer,
@@ -667,6 +677,9 @@ export class PerpsCommand {
       });
     }
 
+    const partialSize = opts.size
+      ? PerpsTx.partialTpslSize(opts.size, position.sizeUsd)
+      : undefined;
     const results: {
       type: string;
       action: string;
@@ -724,9 +737,7 @@ export class PerpsCommand {
               triggerPrice: NumberConverter.toMicroUsd(price),
               requestType: type,
               entirePosition: !opts.size,
-              sizeUsdDelta: opts.size
-                ? NumberConverter.toMicroUsd(opts.size)
-                : undefined,
+              sizeUsdDelta: partialSize,
             },
           ],
         }).catch(this.explainTpslLimit);
@@ -739,7 +750,9 @@ export class PerpsCommand {
           type,
           action: "created",
           triggerPriceUsd: Number(price),
-          sizeUsd: opts.size ? Number(opts.size) : null,
+          sizeUsd: partialSize
+            ? NumberConverter.fromMicroUsd(partialSize)
+            : null,
           signature: result.txid,
           ...(Config.dryRun && {
             transaction: res.serializedTxBase64,

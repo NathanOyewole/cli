@@ -98,6 +98,8 @@ export type LoanChangeResponse = {
   borrowSizeTokenAmount: string;
   ltvPercentage: string;
   liquidationPriceUsd: string;
+  // Repay-withdraw only: the most JLP withdrawable once this repay applies.
+  maxWithdrawTokenAmountBeforeWithdraw?: string;
   serializedTxBase64: string | null;
   txMetadata: TxMetadata | null;
 };

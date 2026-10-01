@@ -1,10 +1,14 @@
 import {
   address,
+  createSolanaRpc,
   getAddressEncoder,
   getProgramDerivedAddress,
+  type Signature,
 } from "@solana/kit";
 import { HTTPError } from "ky";
 
+import { findOpenedIntent } from "../lib/JtxOrder.ts";
+import { Rpc } from "../lib/Rpc.ts";
 import { ClientConfig } from "./ClientConfig.ts";
 
 export type JtxSide = "Bid" | "Ask";
@@ -159,16 +163,26 @@ export type JtxExecuteResponse = {
   signature?: string;
 };
 
+export type JtxIntentStatus = {
+  intentId: string;
+  status: "executed";
+  user: string;
+  subaccountId: number;
+  numIntents: number;
+  jupnetTx: string | null;
+  executedAt: number;
+};
+
 export type JtxTimeInForce =
   | "ImmediateOrCancel"
   | "GoodTilCanceled"
   | "FillOrKill";
 
 const PROGRAM = address("jtxQHH3ysuWRETjaynai3jowPztq2LBJApVFcEv4Wmg");
-// Accounts opened from Solana through cross-chain intents use this subaccount.
-const SOLANA_SUBACCOUNT_ID = 255;
-
 export class JtxPerpsClient {
+  // Accounts opened from Solana through cross-chain intents use this subaccount.
+  public static readonly SOLANA_SUBACCOUNT_ID = 255;
+
   static readonly #ky = ClientConfig.ky.extend({
     prefixUrl: "https://gum-api.jup.net/fe/mainnet-beta/perps",
     hooks: {
@@ -197,7 +211,7 @@ export class JtxPerpsClient {
       seeds: [
         "cross_margin",
         getAddressEncoder().encode(address(walletAddress)),
-        Uint8Array.of(SOLANA_SUBACCOUNT_ID),
+        Uint8Array.of(this.SOLANA_SUBACCOUNT_ID),
       ],
     });
     return pda;
@@ -311,8 +325,55 @@ export class JtxPerpsClient {
     signedTransaction: string
   ): Promise<JtxExecuteResponse> {
     return this.#ky
-      .post("crosschain/intent/execute", { json: { signedTransaction } })
+      .post("crosschain/intent/execute", {
+        json: { signedTransaction },
+        timeout: 60_000,
+      })
       .json();
+  }
+
+  // Null until the intent executes: the API answers 404 while it is pending.
+  public static async getIntentStatus(
+    intentId: string
+  ): Promise<JtxIntentStatus | null> {
+    try {
+      return await this.#ky.get(`crosschain/intent/${intentId}`).json();
+    } catch (err) {
+      if (err instanceof HTTPError && err.response.status === 404) {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  // The source transaction's on-chain error and the intent it opened, or null
+  // while it has not landed.
+  public static async getOpenedIntent(signature: string): Promise<{
+    err: unknown;
+    intent: { intentId: string; user: string } | null;
+  } | null> {
+    const tx = await createSolanaRpc(Rpc.url)
+      .getTransaction(signature as Signature, {
+        commitment: "confirmed",
+        encoding: "json",
+        maxSupportedTransactionVersion: 0,
+      })
+      .send();
+    if (!tx?.meta) {
+      return null;
+    }
+    const keys = [
+      ...tx.transaction.message.accountKeys,
+      ...(tx.meta.loadedAddresses?.writable ?? []),
+      ...(tx.meta.loadedAddresses?.readonly ?? []),
+    ];
+    return {
+      err: tx.meta.err,
+      intent: findOpenedIntent(
+        keys,
+        (tx.meta.innerInstructions ?? []).flatMap((group) => group.instructions)
+      ),
+    };
   }
 
   // A wallet that never traded has no trading account; the API answers 400.

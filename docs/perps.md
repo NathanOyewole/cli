@@ -6,6 +6,10 @@ Requires: an active key for write commands. Read commands (`markets`, `leaderboa
 
 The JLP pool markets are **SOL**, **BTC**, and **ETH**. Collateral can be deposited in SOL, BTC, ETH, or USDC. Minimum collateral is $10 for new positions. Orderbook markets (JUP, HYPE, ZEC, and others) use `jup perps jtx`, see [below](#orderbook-jtx-markets-jup-hype-zec-spcx-sndk-skhynix).
 
+## Transaction outcomes
+
+Pool-market writes (`open`, `set`, `close`) are co-signed and sent by a keeper; the CLI then waits for the transaction to confirm on-chain and exits non-zero if it failed. If a submission times out or the server errors, the transaction may still have been sent: the error starts with `Outcome unknown` and names the signature. Check `jup perps positions` (or `jup perps jtx positions`) or the signature on an explorer before retrying.
+
 ## Commands
 
 ### View positions
@@ -141,6 +145,8 @@ Two sizing modes — provide either `--leverage` or `--size`, not both:
 - `--leverage`: position size = amount × leverage
 - `--size`: explicit position size in USD, leverage is derived
 
+Opening on an existing position first settles its accrued borrow fees out of the deposit. If the deposit is too small to add any size, the CLI refuses instead of signing.
+
 ```bash
 # Market order with leverage
 jup perps open --asset SOL --side long --amount 10 --input USDC --leverage 2
@@ -225,7 +231,7 @@ jup perps set --position <pubkey> --tp 100 --sl 70 --dry-run
 ```
 
 - Get the `positionPubkey` or `orderPubkey` from `jup perps positions`
-- Without `--size`, `--tp`/`--sl` update the whole-position TP/SL if one exists, otherwise create it. With `--size`, a new partial TP/SL is always created; a position can hold several, up to a server limit (the error says how many).
+- Without `--size`, `--tp`/`--sl` update the whole-position TP/SL if one exists, otherwise create it. With `--size`, a new partial TP/SL is always created; a position can hold several, up to a server limit (the error says how many). `--size` can't exceed the position size; 99% or more of it closes the whole position size, as on the web.
 - `--add-collateral` and `--remove-collateral` keep the position size unchanged. `--input`/`--receive` default to the position's collateral token. Amounts outside the server's per-position limits are rejected with the allowed range.
 - A limit order's size cannot be edited (the web app doesn't allow it either): cancel and re-open instead.
 - `--dry-run` previews the update without signing. JSON response includes the unsigned base64 `transaction` for each update.
@@ -264,13 +270,15 @@ jup perps set --position <pubkey> --tp 100 --sl 70 --dry-run
   "action": "remove-collateral", // or "add-collateral"
   "positionPubkey": "3qMZ...83tz",
   "collateralUsd": 8487.41, // collateral after the change
-  "collateralDeltaUsd": -300, // negative when removing
+  "collateralDeltaUsd": -300, // net change; negative when removing
   "leverage": 34.55, // leverage after the change
   "liquidationPriceUsd": 114.27,
   "received": "74.07 USDC", // null when adding; accrued borrow fees are settled first
-  "feeUsd": 225.93,
+  "feeUsd": 225.93, // includes accrued borrow fees settled by the change
   "signature": "5YhT...9AKU"
 }
+// add-collateral also returns "depositUsd": the gross amount deposited. Accrued
+// borrow fees come out of it, so collateralDeltaUsd = depositUsd - borrow fees.
 ```
 
 ### Close a position or cancel an order
@@ -411,7 +419,7 @@ jup perps loans history [--key <name> | --address <wallet>] [--limit 20]
 # Deposit JLP and borrow USDC (either option alone also works)
 jup perps loans borrow --deposit 100 --amount 200
 
-# Repay USDC and/or withdraw JLP ('max' repays everything / withdraws the most allowed)
+# Repay USDC and/or withdraw JLP ('max' repays everything / withdraws the most allowed once the repay applies)
 jup perps loans repay --amount 50
 jup perps loans repay --amount max --withdraw max
 ```
@@ -596,7 +604,12 @@ jup perps stats --address <wallet-address> --asset ETH --week current
 
 Jupiter's orderbook perps run on a separate venue. They live under `jup perps jtx` because they work differently from the SOL/BTC/ETH pool markets: collateral is always USDC and held in an isolated account per market, positions are identified by market (not a pubkey), orders have IDs, and there is no TP/SL. `jup perps open --asset JUP` points here.
 
-Orders, cancels, and collateral moves are cross-chain intents: the API builds a Solana transaction, you sign it, and it is submitted to the JTX execute endpoint. After submission the CLI polls order history for up to 20 seconds to report the fill status.
+Orders, cancels, and collateral moves are cross-chain intents: the API builds a Solana transaction, you sign it, and it is submitted to the JTX execute endpoint. After submission the CLI waits for the outcome, as the web does, and exits non-zero if it can't confirm it:
+
+- Market orders succeed only once order history shows a fill. An order cancelled without a fill fails, and so does one not seen within 20 seconds (the error names the signature).
+- Limit orders succeed once they rest in the book or show in history.
+- Cancels (`close --order`) succeed once the order leaves the open orders, and fail if it filled first.
+- Collateral moves (`set`) wait up to 2 minutes for JTX to execute the intent the Solana transaction opened. If the transaction landed but the intent hasn't executed yet, `status` is `"pending"`.
 
 Opening positions is a private beta: the wallet needs at least 69 JUP staked with max lock (checked on-chain before building, as the web does). Closing, cancelling, and collateral changes are not gated.
 
@@ -626,6 +639,7 @@ jup perps jtx set --asset JUP --remove-collateral 10
 ```
 
 - `--amount` is USDC collateral (minimum 10). Leverage is 1.1x up to the market's `maxLeverage`.
+- Sizing follows the web: a market order is sized against the live order book, so collateral also covers its price impact, and limit prices round to the tick away from you (down for buys, up for sells).
 - Market orders carry a worst price (`priceUsd`) 1% past the mark; they are rejected when the book is thin (`marketOrders: false` in `markets`), use `--limit` then.
 - Deposits are at least 5 USDC; withdrawals are capped at 95% of the account's free balance.
 
@@ -728,17 +742,30 @@ jup perps jtx set --asset JUP --remove-collateral 10
   "leverage": 3, // open only
   "priceUsd": 0.33341, // limit price, or worst fill price for market orders
   "clientOrderId": "4211830984521",
-  "orderId": "6011...2231", // null until seen in order history
-  "status": "filled", // open, filled, cancelled, or "submitted" if not yet seen
+  "orderId": "6011...2231", // null in --dry-run
+  "status": "filled", // open, filled, partially_filled; null in --dry-run
   "filledSize": 90.8,
   "signature": "3dV9...8zG1"
 }
 
 // Example JSON response (cancel):
-{ "action": "cancel-order", "orderId": "5978...8856", "asset": "JUP", "signature": "4wYb...drLf" }
+{
+  "action": "cancel-order",
+  "orderId": "5978...8856",
+  "asset": "JUP",
+  "status": "cancelled", // null in --dry-run
+  "filledSize": 0, // filled before the cancel took effect
+  "signature": "4wYb...drLf"
+}
 
 // Example JSON response (set):
-{ "action": "add-collateral", "asset": "JUP", "amountUsd": 20, "signature": "5YhT...9AKU" } // or remove-collateral
+{
+  "action": "add-collateral", // or remove-collateral
+  "asset": "JUP",
+  "amountUsd": 20,
+  "status": "executed", // "pending" if JTX has not applied it yet; null in --dry-run
+  "signature": "5YhT...9AKU"
+}
 ```
 
 ## Workflows

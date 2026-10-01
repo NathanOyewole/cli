@@ -17,18 +17,29 @@ export class Rpc {
     signedTx: Base64EncodedWireTransaction,
     timeoutMs = 60_000
   ): Promise<Signature> {
-    const rpc = createSolanaRpc(this.url);
-    const signature = await rpc
+    const signature = await createSolanaRpc(this.url)
       .sendTransaction(signedTx, {
         encoding: "base64",
         preflightCommitment: "confirmed",
       })
       .send();
+    await this.confirm(signature, timeoutMs);
+    return signature;
+  }
 
+  public static async confirm(
+    signature: string,
+    timeoutMs = 60_000
+  ): Promise<void> {
+    const rpc = createSolanaRpc(this.url);
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const { value } = await rpc.getSignatureStatuses([signature]).send();
-      const status = value[0];
+      // A flaky status read must not fail a transaction that may have landed.
+      const status = await rpc
+        .getSignatureStatuses([signature as Signature])
+        .send()
+        .then(({ value }) => value[0])
+        .catch(() => undefined);
       if (status?.err) {
         throw new Error(
           `Transaction ${signature} failed: ${JSON.stringify(status.err, (_k, v) => (typeof v === "bigint" ? v.toString() : v))}`
@@ -38,7 +49,7 @@ export class Rpc {
         status?.confirmationStatus === "confirmed" ||
         status?.confirmationStatus === "finalized"
       ) {
-        return signature;
+        return;
       }
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
