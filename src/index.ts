@@ -8,6 +8,7 @@ import { PerpsCommand } from "./commands/PerpsCommand.ts";
 import { PredictionsCommand } from "./commands/PredictionsCommand.ts";
 import { SignCommand } from "./commands/SignCommand.ts";
 import { SpotCommand } from "./commands/SpotCommand.ts";
+import { StakeCommand } from "./commands/StakeCommand.ts";
 import { UpdateCommand } from "./commands/UpdateCommand.ts";
 import { VrfdCommand } from "./commands/VrfdCommand.ts";
 
@@ -44,6 +45,7 @@ PerpsCommand.register(program);
 PredictionsCommand.register(program);
 SignCommand.register(program);
 SpotCommand.register(program);
+StakeCommand.register(program);
 UpdateCommand.register(program);
 VrfdCommand.register(program);
 
