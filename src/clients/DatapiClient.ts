@@ -110,10 +110,25 @@ type GetSpotHistoryResponse = {
   next: string | null;
 };
 
+export type ShieldWarning = {
+  type: string;
+  message: string;
+  severity: "info" | "warning" | "critical";
+  source?: string | null | undefined;
+};
+
+type GetShieldResponse = {
+  warnings: Record<string, ShieldWarning[]>;
+};
+
 export class DatapiClient {
   static readonly #ky = ClientConfig.ky.extend({
     prefixUrl: ClientConfig.host,
     throwHttpErrors: false,
+  });
+  // Shield is not exposed on the public API gateway; the web app calls datapi directly.
+  static readonly #shieldKy = ClientConfig.ky.extend({
+    prefixUrl: "https://datapi.jup.ag",
   });
 
   public static async getTokensSearch(
@@ -181,5 +196,13 @@ export class DatapiClient {
       throw new Error(`Token not found: ${input}`);
     }
     return token;
+  }
+
+  public static async getShield(mints: string[]): Promise<GetShieldResponse> {
+    return this.#shieldKy
+      .get("v1/shield", {
+        searchParams: { mints: mints.join(","), isJupiter: true },
+      })
+      .json();
   }
 }

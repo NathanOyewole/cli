@@ -1,10 +1,15 @@
 import type { Base64EncodedBytes } from "@solana/kit";
 
-import type { Token } from "../clients/DatapiClient.ts";
+import {
+  DatapiClient,
+  type ShieldWarning,
+  type Token,
+} from "../clients/DatapiClient.ts";
 import {
   UltraClient,
   type GetOrderResponse,
   type PostExecuteResponse,
+  type SwapSettings,
 } from "../clients/UltraClient.ts";
 import { Config } from "./Config.ts";
 import { NumberConverter } from "./NumberConverter.ts";
@@ -20,6 +25,23 @@ export type SwapResult = {
   outAmount: string;
   networkFeeLamports: number;
 };
+
+export type SwapSettingsOpts = {
+  exactOut?: boolean;
+  priorityFee?: string;
+  jitoTip?: string;
+  feeType?: string;
+  useWsol?: boolean;
+  excludeDexes?: string;
+  excludeRouters?: string;
+};
+
+export type TokenWarning = ShieldWarning & {
+  token: { id: string; symbol: string; decimals: number };
+};
+
+const MIN_JITO_TIP_LAMPORTS = 1000;
+const ROUTERS = ["metis", "jupiterz", "hashflow", "dflow"];
 
 export class Swap {
   public static validateAmountOpts(opts: {
@@ -41,21 +63,17 @@ export class Swap {
     amount?: string;
     rawAmount?: string;
     slippageBps?: string;
+    settings?: SwapSettings;
   }): Promise<SwapResult> {
     const { signer, inputToken, outputToken } = opts;
     const inputMultiplier = this.getScaledUiMultiplier(inputToken);
     const outputMultiplier = this.getScaledUiMultiplier(outputToken);
 
     const order = await UltraClient.getOrder({
+      ...opts.settings,
       inputMint: inputToken.id,
       outputMint: outputToken.id,
-      amount:
-        opts.rawAmount ??
-        NumberConverter.toChainAmount(
-          opts.amount!,
-          inputToken.decimals,
-          inputMultiplier
-        ),
+      amount: this.toOrderAmount(opts),
       taker: signer.address,
       slippageBps: opts.slippageBps,
     });
@@ -136,6 +154,104 @@ export class Swap {
       outAmount,
       networkFeeLamports,
     };
+  }
+
+  // In ExactOut mode the amount denominates the output token.
+  public static toOrderAmount(opts: {
+    inputToken: Token;
+    outputToken: Token;
+    amount?: string | undefined;
+    rawAmount?: string | undefined;
+    settings?: SwapSettings | undefined;
+  }): string {
+    if (opts.rawAmount) {
+      return opts.rawAmount;
+    }
+    const token =
+      opts.settings?.swapMode === "ExactOut"
+        ? opts.outputToken
+        : opts.inputToken;
+    return NumberConverter.toChainAmount(
+      opts.amount!,
+      token.decimals,
+      this.getScaledUiMultiplier(token)
+    );
+  }
+
+  public static parseSettings(opts: SwapSettingsOpts): SwapSettings {
+    const lamports = (value: string | undefined, flag: string, min = 0) => {
+      if (value === undefined) {
+        return undefined;
+      }
+      const n = Number(value);
+      if (!Number.isInteger(n) || n < min) {
+        throw new Error(
+          `${flag} must be an integer of at least ${min} lamports.`
+        );
+      }
+      return String(n);
+    };
+    const list = (value: string | undefined) =>
+      value
+        ?.split(",")
+        .map((v) => v.trim())
+        .filter(Boolean)
+        .join(",") || undefined;
+
+    let broadcastFeeType: SwapSettings["broadcastFeeType"];
+    if (opts.feeType !== undefined) {
+      if (opts.feeType !== "max-cap" && opts.feeType !== "exact-fee") {
+        throw new Error("--fee-type must be max-cap or exact-fee.");
+      }
+      broadcastFeeType = opts.feeType === "max-cap" ? "maxCap" : "exactFee";
+    }
+    const excludeRouters = list(opts.excludeRouters);
+    const unknownRouter = excludeRouters
+      ?.split(",")
+      .find((r) => !ROUTERS.includes(r));
+    if (unknownRouter) {
+      throw new Error(
+        `Unknown router "${unknownRouter}" in --exclude-routers. Must be one of: ${ROUTERS.join(", ")}.`
+      );
+    }
+
+    const settings: SwapSettings = {
+      swapMode: opts.exactOut ? "ExactOut" : undefined,
+      priorityFeeLamports: lamports(opts.priorityFee, "--priority-fee"),
+      jitoTipLamports: lamports(
+        opts.jitoTip,
+        "--jito-tip",
+        MIN_JITO_TIP_LAMPORTS
+      ),
+      broadcastFeeType,
+      useWsol: opts.useWsol || undefined,
+      excludeDexes: list(opts.excludeDexes),
+      excludeRouters,
+    };
+    return Object.fromEntries(
+      Object.entries(settings).filter(([, v]) => v !== undefined)
+    );
+  }
+
+  // Shield warnings are advisory, so a failed lookup never blocks a swap.
+  public static async getTokenWarnings(
+    tokens: Token[]
+  ): Promise<TokenWarning[] | null> {
+    try {
+      const { warnings } = await DatapiClient.getShield(
+        tokens.map((t) => t.id)
+      );
+      return tokens.flatMap((t) =>
+        (warnings[t.id] ?? []).map((w) => ({
+          token: { id: t.id, symbol: t.symbol, decimals: t.decimals },
+          type: w.type,
+          severity: w.severity,
+          message: w.message,
+        }))
+      );
+    } catch {
+      return null;
+    }
   }
 
   public static getScaledUiMultiplier(token: Token): number | undefined {

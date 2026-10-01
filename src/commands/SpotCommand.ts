@@ -18,7 +18,7 @@ import { Config } from "../lib/Config.ts";
 import { NumberConverter } from "../lib/NumberConverter.ts";
 import { Output } from "../lib/Output.ts";
 import { Signer } from "../lib/Signer.ts";
-import { Swap } from "../lib/Swap.ts";
+import { Swap, type SwapSettingsOpts, type TokenWarning } from "../lib/Swap.ts";
 import { SpotDcaCommand } from "./SpotDcaCommand.ts";
 import { SpotLimitCommand } from "./SpotLimitCommand.ts";
 
@@ -46,6 +46,15 @@ export class SpotCommand {
         "--raw-amount <n>",
         "Amount in on-chain units (no decimal conversion)"
       )
+      .option("--exact-out", "Treat the amount as the exact output amount")
+      .option(
+        "--exclude-dexes <labels>",
+        "Comma-separated DEX labels to exclude from routing"
+      )
+      .option(
+        "--exclude-routers <ids>",
+        "Comma-separated routers to exclude (metis, jupiterz, hashflow, dflow)"
+      )
       .action((opts) => this.quote(opts));
     spot
       .command("swap")
@@ -61,6 +70,28 @@ export class SpotCommand {
       .option(
         "--slippage <bps>",
         "Max slippage in basis points (leave empty to use Jupiter's Real-Time Slippage Estimation)"
+      )
+      .option("--exact-out", "Treat the amount as the exact output amount")
+      .option(
+        "--priority-fee <lamports>",
+        "Priority fee in lamports (max cap unless --fee-type exact-fee)"
+      )
+      .option(
+        "--jito-tip <lamports>",
+        "Jito tip in lamports (min 1000; max cap unless --fee-type exact-fee)"
+      )
+      .option(
+        "--fee-type <type>",
+        "How --priority-fee/--jito-tip apply: max-cap or exact-fee"
+      )
+      .option("--use-wsol", "Use wrapped SOL instead of native SOL")
+      .option(
+        "--exclude-dexes <labels>",
+        "Comma-separated DEX labels to exclude from routing"
+      )
+      .option(
+        "--exclude-routers <ids>",
+        "Comma-separated routers to exclude (metis, jupiterz, hashflow, dflow)"
       )
       .action((opts) => this.swap(opts));
     spot
@@ -149,13 +180,16 @@ export class SpotCommand {
     });
   }
 
-  private static async quote(opts: {
-    from: string;
-    to: string;
-    amount?: string;
-    rawAmount?: string;
-  }): Promise<void> {
+  private static async quote(
+    opts: {
+      from: string;
+      to: string;
+      amount?: string;
+      rawAmount?: string;
+    } & SwapSettingsOpts
+  ): Promise<void> {
     Swap.validateAmountOpts(opts);
+    const settings = Swap.parseSettings(opts);
 
     const [inputToken, outputToken] = await Promise.all([
       DatapiClient.resolveToken(opts.from),
@@ -164,17 +198,20 @@ export class SpotCommand {
     const inputMultiplier = Swap.getScaledUiMultiplier(inputToken);
     const outputMultiplier = Swap.getScaledUiMultiplier(outputToken);
 
-    const order = await UltraClient.getOrder({
-      inputMint: inputToken.id,
-      outputMint: outputToken.id,
-      amount:
-        opts.rawAmount ??
-        NumberConverter.toChainAmount(
-          opts.amount!,
-          inputToken.decimals,
-          inputMultiplier
-        ),
-    });
+    const [order, warnings] = await Promise.all([
+      UltraClient.getOrder({
+        ...settings,
+        inputMint: inputToken.id,
+        outputMint: outputToken.id,
+        amount: Swap.toOrderAmount({
+          ...opts,
+          inputToken,
+          outputToken,
+          settings,
+        }),
+      }),
+      Swap.getTokenWarnings([inputToken, outputToken]),
+    ]);
     if (order.error) {
       throw new Error(order.errorMessage ?? order.error);
     }
@@ -207,6 +244,7 @@ export class SpotCommand {
         inUsdValue: order.inUsdValue,
         outUsdValue: order.outUsdValue,
         priceImpact: order.priceImpact,
+        warnings,
       });
       return;
     }
@@ -226,19 +264,23 @@ export class SpotCommand {
           label: "Price Impact",
           value: Output.formatPercentageChange(order.priceImpact),
         },
+        ...this.warningRows(warnings),
       ],
     });
   }
 
-  private static async swap(opts: {
-    from: string;
-    to: string;
-    amount?: string;
-    rawAmount?: string;
-    key?: string;
-    slippage?: string;
-  }): Promise<void> {
+  private static async swap(
+    opts: {
+      from: string;
+      to: string;
+      amount?: string;
+      rawAmount?: string;
+      key?: string;
+      slippage?: string;
+    } & SwapSettingsOpts
+  ): Promise<void> {
     Swap.validateAmountOpts(opts);
+    const swapSettings = Swap.parseSettings(opts);
 
     if (opts.slippage !== undefined) {
       const bps = Number(opts.slippage);
@@ -254,14 +296,18 @@ export class SpotCommand {
       DatapiClient.resolveToken(opts.to),
     ]);
 
-    const swap = await Swap.execute({
-      signer,
-      inputToken,
-      outputToken,
-      amount: opts.amount,
-      rawAmount: opts.rawAmount,
-      slippageBps: opts.slippage,
-    });
+    const [swap, warnings] = await Promise.all([
+      Swap.execute({
+        signer,
+        inputToken,
+        outputToken,
+        amount: opts.amount,
+        rawAmount: opts.rawAmount,
+        slippageBps: opts.slippage,
+        settings: swapSettings,
+      }),
+      Swap.getTokenWarnings([inputToken, outputToken]),
+    ]);
 
     const networkFee = NumberConverter.fromChainAmount(
       swap.networkFeeLamports.toString(),
@@ -289,6 +335,7 @@ export class SpotCommand {
         outUsdValue: swap.order.outUsdValue,
         priceImpact: swap.order.priceImpact,
         networkFeeLamports: swap.networkFeeLamports,
+        warnings,
         ...(Config.dryRun && {
           transaction: swap.order.transaction,
         }),
@@ -318,6 +365,7 @@ export class SpotCommand {
           label: "Network Fee",
           value: `${networkFee} SOL`,
         },
+        ...this.warningRows(warnings),
         ...(!Config.dryRun
           ? [{ label: "Tx Signature", value: swap.result!.signature }]
           : []),
@@ -929,6 +977,29 @@ export class SpotCommand {
       mints.push(Asset.SOL.id);
     }
     return mints;
+  }
+
+  private static warningRows(
+    warnings: TokenWarning[] | null
+  ): { label: string; value: string }[] {
+    if (!warnings || warnings.length === 0) {
+      return [];
+    }
+    const color = {
+      critical: chalk.red,
+      warning: chalk.yellow,
+      info: chalk.gray,
+    } as const;
+    return [
+      {
+        label: "Warnings",
+        value: warnings
+          .map((w) =>
+            (color[w.severity] ?? chalk.gray)(`${w.token.symbol}: ${w.message}`)
+          )
+          .join("\n"),
+      },
+    ];
   }
 
   private static parseTimestamp(value: string): string {
