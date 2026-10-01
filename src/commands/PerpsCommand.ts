@@ -1,13 +1,17 @@
-import type { Base64EncodedBytes } from "@solana/kit";
+import { writeFileSync } from "node:fs";
+
 import chalk from "chalk";
 import type { Command } from "commander";
+import { HTTPError } from "ky";
 
 import { PerpsClient } from "../clients/PerpsClient.ts";
 import { Asset, resolveAsset } from "../lib/Asset.ts";
 import { Config } from "../lib/Config.ts";
 import { NumberConverter } from "../lib/NumberConverter.ts";
 import { Output } from "../lib/Output.ts";
+import { PerpsTx } from "../lib/PerpsTx.ts";
 import { Signer } from "../lib/Signer.ts";
+import { PerpsCollateral } from "./PerpsCollateral.ts";
 
 export class PerpsCommand {
   public static register(program: Command): void {
@@ -44,11 +48,34 @@ export class PerpsCommand {
       .action((opts) => this.open(opts));
     perps
       .command("set")
-      .description("Update TP/SL or limit order trigger price")
-      .option("--position <pubkey>", "Position to set/update TP/SL on")
+      .description(
+        "Update TP/SL, position collateral, or limit order trigger price"
+      )
+      .option("--position <pubkey>", "Position to update")
       .option("--order <pubkey>", "Limit order to update")
       .option("--tp <price>", "Take-profit trigger price")
       .option("--sl <price>", "Stop-loss trigger price")
+      .option(
+        "--size <usd>",
+        "Create a partial TP/SL that closes this USD size instead of the whole position"
+      )
+      .option(
+        "--add-collateral <amount>",
+        "Deposit collateral (in --input token units) without changing size"
+      )
+      .option(
+        "--remove-collateral <usd>",
+        "Withdraw this USD value of collateral without changing size"
+      )
+      .option(
+        "--input <token>",
+        "Token to deposit with --add-collateral (defaults to position's collateral)"
+      )
+      .option(
+        "--receive <token>",
+        "Token to receive with --remove-collateral (defaults to position's collateral)"
+      )
+      .option("--slippage <bps>", "Max slippage in basis points", "200")
       .option("--limit <price>", "New trigger price for limit order")
       .option("--key <name>", "Key to use for signing")
       .action((opts) => this.set(opts));
@@ -56,7 +83,10 @@ export class PerpsCommand {
       .command("close")
       .description("Close a position, cancel a limit order, or cancel TP/SL")
       .option("--position <pubkey>", "Position to close (or 'all')")
-      .option("--order <pubkey>", "Limit order to cancel")
+      .option(
+        "--order <pubkey>",
+        "Limit order to cancel (or 'expired' to close all expired orders)"
+      )
       .option("--tpsl <pubkey>", "TP/SL order to cancel")
       .option("--size <usd>", "USD amount to reduce (partial close)")
       .option(
@@ -80,32 +110,11 @@ export class PerpsCommand {
         "Show trades before this date or UNIX timestamp"
       )
       .option("--limit <n>", "Max number of results", "20")
+      .option(
+        "--export <file>",
+        "Write the wallet's full trade history to a CSV file instead"
+      )
       .action((opts) => this.history(opts));
-  }
-
-  private static async signAndExecute(
-    signer: Signer,
-    action: string,
-    serializedTxBase64: string
-  ): Promise<{ action: string; txid: string | null }> {
-    if (Config.dryRun) {
-      return { action, txid: null };
-    }
-    const signedTx = await signer.signTransaction(
-      serializedTxBase64 as Base64EncodedBytes
-    );
-    return PerpsClient.postExecute({ action, serializedTxBase64: signedTx });
-  }
-
-  private static normalizeSide(side: string): string {
-    const s = side.toLowerCase();
-    if (s === "buy" || s === "long") {
-      return "long";
-    }
-    if (s === "sell" || s === "short") {
-      return "short";
-    }
-    throw new Error("Invalid --side. Must be long, short, buy, or sell.");
   }
 
   private static async positions(opts: {
@@ -255,15 +264,29 @@ export class PerpsCommand {
 
   private static async markets(): Promise<void> {
     const markets = await PerpsClient.getMarkets();
+    const pools = await Promise.all(
+      markets.map((m) => PerpsClient.getPoolInfo(resolveAsset(m.asset).id))
+    );
 
-    const formatted = markets.map((r) => ({
-      asset: r.asset,
-      priceUsd: Number(r.price),
-      changePct24h: Number(r.priceChange24H),
-      highUsd24h: Number(r.priceHigh24H),
-      lowUsd24h: Number(r.priceLow24H),
-      volumeUsd24h: Number(r.volume),
-    }));
+    const formatted = markets.map((r, i) => {
+      const pool = pools[i]!;
+      return {
+        asset: r.asset,
+        priceUsd: Number(r.price),
+        changePct24h: Number(r.priceChange24H),
+        highUsd24h: Number(r.priceHigh24H),
+        lowUsd24h: Number(r.priceLow24H),
+        volumeUsd24h: Number(r.volume),
+        openFeePct: Number(pool.openFeePercent),
+        maxPriceImpactFeePct: Number(pool.maxPriceImpactFeePercent),
+        longBorrowRatePctPerHour: Number(pool.longBorrowRatePercent),
+        shortBorrowRatePctPerHour: Number(pool.shortBorrowRatePercent),
+        longAvailableLiquidityUsd: Number(pool.longAvailableLiquidity),
+        shortAvailableLiquidityUsd: Number(pool.shortAvailableLiquidity),
+        longUtilizationPct: Number(pool.longUtilizationPercent),
+        shortUtilizationPct: Number(pool.shortUtilizationPercent),
+      };
+    });
 
     if (Output.isJson()) {
       Output.json(formatted);
@@ -276,17 +299,21 @@ export class PerpsCommand {
         asset: "Asset",
         priceUsd: "Price",
         changePct24h: "24h Change",
-        highUsd24h: "24h High",
-        lowUsd24h: "24h Low",
         volumeUsd24h: "24h Volume",
+        openFee: "Open Fee",
+        borrow: "Borrow /hr (L/S)",
+        liquidity: "Available Liq. (L/S)",
+        utilization: "Utilization (L/S)",
       },
       rows: formatted.map((r) => ({
         asset: r.asset,
         priceUsd: Output.formatDollar(r.priceUsd),
         changePct24h: Output.formatPercentageChange(r.changePct24h),
-        highUsd24h: Output.formatDollar(r.highUsd24h),
-        lowUsd24h: Output.formatDollar(r.lowUsd24h),
-        volumeUsd24h: Output.formatDollar(r.volumeUsd24h),
+        volumeUsd24h: Output.formatDollar(r.volumeUsd24h, { decimals: 0 }),
+        openFee: `${r.openFeePct}%`,
+        borrow: `${r.longBorrowRatePctPerHour}% / ${r.shortBorrowRatePctPerHour}%`,
+        liquidity: `${Output.formatDollar(r.longAvailableLiquidityUsd, { decimals: 0 })} / ${Output.formatDollar(r.shortAvailableLiquidityUsd, { decimals: 0 })}`,
+        utilization: `${r.longUtilizationPct}% / ${r.shortUtilizationPct}%`,
       })),
     });
   }
@@ -317,7 +344,7 @@ export class PerpsCommand {
       );
     }
 
-    const side = this.normalizeSide(opts.side);
+    const side = PerpsTx.normalizeSide(opts.side);
     const asset = opts.asset.toUpperCase();
     const inputToken = opts.input.toUpperCase();
     const signer = await Signer.load(opts.key ?? Config.load().activeKey);
@@ -349,7 +376,7 @@ export class PerpsCommand {
         throw new Error("API returned no transaction for limit order.");
       }
 
-      const result = await this.signAndExecute(
+      const result = await PerpsTx.signAndExecute(
         signer,
         "create-limit-order",
         res.serializedTxBase64
@@ -432,7 +459,7 @@ export class PerpsCommand {
         tpsl: tpsl.length > 0 ? tpsl : undefined,
       });
 
-      const result = await this.signAndExecute(
+      const result = await PerpsTx.signAndExecute(
         signer,
         "increase-position",
         res.serializedTxBase64
@@ -509,6 +536,12 @@ export class PerpsCommand {
     order?: string;
     tp?: string;
     sl?: string;
+    size?: string;
+    addCollateral?: string;
+    removeCollateral?: string;
+    input?: string;
+    receive?: string;
+    slippage: string;
     limit?: string;
     key?: string;
   }): Promise<void> {
@@ -519,8 +552,26 @@ export class PerpsCommand {
     if (opts.position && opts.order) {
       throw new Error("Only one of --position or --order can be provided.");
     }
-    if (opts.position && !opts.tp && !opts.sl) {
-      throw new Error("--position requires at least one of --tp or --sl.");
+    const isCollateralChange = Boolean(
+      opts.addCollateral || opts.removeCollateral
+    );
+    if (opts.addCollateral && opts.removeCollateral) {
+      throw new Error(
+        "Only one of --add-collateral or --remove-collateral can be provided."
+      );
+    }
+    if (isCollateralChange && (opts.tp || opts.sl || opts.order)) {
+      throw new Error(
+        "--add-collateral/--remove-collateral cannot be combined with --tp, --sl, or --order."
+      );
+    }
+    if (opts.position && !isCollateralChange && !opts.tp && !opts.sl) {
+      throw new Error(
+        "--position requires --tp, --sl, --add-collateral, or --remove-collateral."
+      );
+    }
+    if (opts.size && !opts.tp && !opts.sl) {
+      throw new Error("--size requires --tp or --sl (partial TP/SL).");
     }
     if (opts.order && !opts.limit) {
       throw new Error("--order requires --limit.");
@@ -538,7 +589,7 @@ export class PerpsCommand {
         throw new Error("API returned no transaction for limit order update.");
       }
 
-      const result = await this.signAndExecute(
+      const result = await PerpsTx.signAndExecute(
         signer,
         "update-limit-order",
         res.serializedTxBase64
@@ -576,8 +627,6 @@ export class PerpsCommand {
       return;
     }
 
-    // Set/update TP/SL on position
-    // Fetch existing position to check for existing tpsl
     const positionsRes = await PerpsClient.getPositions(signer.address);
     const position = positionsRes.dataList.find(
       (p) => p.positionPubkey === opts.position
@@ -586,10 +635,26 @@ export class PerpsCommand {
       throw new Error(`Position not found: ${opts.position}`);
     }
 
+    if (opts.addCollateral) {
+      return PerpsCollateral.add(signer, position, {
+        amount: opts.addCollateral,
+        input: opts.input,
+        slippage: opts.slippage,
+      });
+    }
+    if (opts.removeCollateral) {
+      return PerpsCollateral.remove(signer, position, {
+        usd: opts.removeCollateral,
+        receive: opts.receive,
+        slippage: opts.slippage,
+      });
+    }
+
     const results: {
       type: string;
       action: string;
       triggerPriceUsd: number;
+      sizeUsd: number | null;
       signature: string | null;
       transaction?: string;
     }[] = [];
@@ -602,9 +667,13 @@ export class PerpsCommand {
         continue;
       }
 
-      const existing = position.tpslRequests.find(
-        (t) => t.requestType === type
-      );
+      // Partial TP/SLs stack, so --size always creates a new one; without it
+      // the single whole-position TP/SL is updated in place.
+      const existing = opts.size
+        ? undefined
+        : position.tpslRequests.find(
+            (t) => t.requestType === type && t.entirePosition
+          );
 
       if (existing) {
         // Update existing
@@ -612,7 +681,7 @@ export class PerpsCommand {
           positionRequestPubkey: existing.positionRequestPubkey,
           triggerPrice: NumberConverter.toMicroUsd(price),
         });
-        const result = await this.signAndExecute(
+        const result = await PerpsTx.signAndExecute(
           signer,
           "update-tpsl",
           res.serializedTxBase64
@@ -621,6 +690,7 @@ export class PerpsCommand {
           type,
           action: "updated",
           triggerPriceUsd: Number(price),
+          sizeUsd: null,
           signature: result.txid,
           ...(Config.dryRun && {
             transaction: res.serializedTxBase64,
@@ -636,11 +706,14 @@ export class PerpsCommand {
               receiveToken: position.collateralToken,
               triggerPrice: NumberConverter.toMicroUsd(price),
               requestType: type,
-              entirePosition: true,
+              entirePosition: !opts.size,
+              sizeUsdDelta: opts.size
+                ? NumberConverter.toMicroUsd(opts.size)
+                : undefined,
             },
           ],
-        });
-        const result = await this.signAndExecute(
+        }).catch(this.explainTpslLimit);
+        const result = await PerpsTx.signAndExecute(
           signer,
           "create-tpsl",
           res.serializedTxBase64
@@ -649,6 +722,7 @@ export class PerpsCommand {
           type,
           action: "created",
           triggerPriceUsd: Number(price),
+          sizeUsd: opts.size ? Number(opts.size) : null,
           signature: result.txid,
           ...(Config.dryRun && {
             transaction: res.serializedTxBase64,
@@ -670,16 +744,29 @@ export class PerpsCommand {
       console.log(Output.DRY_RUN_LABEL);
     }
     for (const r of results) {
-      if (Config.dryRun) {
-        console.log(
-          `${r.type.toUpperCase()} ${r.action} at $${r.triggerPriceUsd}`
-        );
-      } else {
-        console.log(
-          `${r.type.toUpperCase()} ${r.action} at $${r.triggerPriceUsd} (tx: ${r.signature})`
+      const size = r.sizeUsd ? ` for $${r.sizeUsd} of size` : "";
+      const tx = Config.dryRun ? "" : ` (tx: ${r.signature})`;
+      console.log(
+        `${r.type.toUpperCase()} ${r.action} at $${r.triggerPriceUsd}${size}${tx}`
+      );
+    }
+  }
+
+  private static async explainTpslLimit(err: unknown): Promise<never> {
+    if (err instanceof HTTPError) {
+      const body = (await err.response
+        .clone()
+        .json()
+        .catch(() => undefined)) as
+        | { code?: string; metadata?: { maxTpslRequests?: number } }
+        | undefined;
+      if (body?.code === "maximum_tpsl_requests_exceeded") {
+        throw new Error(
+          `This position already has the maximum of ${body.metadata?.maxTpslRequests ?? "allowed"} TP/SL orders. Cancel one with 'jup perps close --tpsl <pubkey>' first.`
         );
       }
     }
+    throw err;
   }
 
   private static async close(opts: {
@@ -704,10 +791,14 @@ export class PerpsCommand {
 
     const signer = await Signer.load(opts.key ?? Config.load().activeKey);
 
+    if (opts.order === "expired") {
+      return this.closeExpiredOrders(signer);
+    }
+
     if (opts.order) {
       // Cancel limit order
       const res = await PerpsClient.deleteLimitOrder(opts.order);
-      const result = await this.signAndExecute(
+      const result = await PerpsTx.signAndExecute(
         signer,
         "cancel-limit-order",
         res.serializedTxBase64
@@ -736,7 +827,7 @@ export class PerpsCommand {
     if (opts.tpsl) {
       // Cancel TP/SL
       const res = await PerpsClient.deleteTpsl(opts.tpsl);
-      const result = await this.signAndExecute(
+      const result = await PerpsTx.signAndExecute(
         signer,
         "cancel-tpsl",
         res.serializedTxBase64
@@ -790,7 +881,7 @@ export class PerpsCommand {
 
       const sigs: string[] = [];
       for (const tx of res.serializedTxs) {
-        const result = await this.signAndExecute(
+        const result = await PerpsTx.signAndExecute(
           signer,
           "decrease-position",
           tx.serializedTxBase64
@@ -835,7 +926,7 @@ export class PerpsCommand {
       maxSlippageBps: opts.slippage,
     });
 
-    const result = await this.signAndExecute(
+    const result = await PerpsTx.signAndExecute(
       signer,
       "decrease-position",
       res.serializedTxBase64
@@ -903,6 +994,48 @@ export class PerpsCommand {
     });
   }
 
+  // Expired limit orders are closed by the user, not a keeper: the server
+  // pre-builds one tx per order and they go straight to RPC.
+  private static async closeExpiredOrders(signer: Signer): Promise<void> {
+    const res = await PerpsClient.getExpiredOrders(signer.address);
+    const orders = res.serializedTxs.map((tx) => tx.positionRequestPubkey);
+    const signatures: string[] = [];
+    for (const tx of Config.dryRun ? [] : res.serializedTxs) {
+      signatures.push(
+        (await PerpsTx.signAndSend(signer, tx.serializedTxBase64))!
+      );
+    }
+
+    if (Output.isJson()) {
+      Output.json({
+        ...(Config.dryRun && { dryRun: true }),
+        action: "close-expired-orders",
+        orders,
+        signatures: Config.dryRun ? null : signatures,
+        ...(Config.dryRun && {
+          transactions: res.serializedTxs.map((tx) => tx.serializedTxBase64),
+        }),
+      });
+      return;
+    }
+
+    if (orders.length === 0) {
+      console.log("No expired limit orders.");
+      return;
+    }
+    if (Config.dryRun) {
+      console.log(
+        `${Output.DRY_RUN_LABEL} Would close ${orders.length} expired limit order${orders.length !== 1 ? "s" : ""}`
+      );
+      return;
+    }
+    Output.table({
+      type: "horizontal",
+      headers: { order: "Order", signature: "Tx Signature" },
+      rows: orders.map((order, i) => ({ order, signature: signatures[i] })),
+    });
+  }
+
   private static parseTimestamp(value: string): string {
     if (/^\d+$/.test(value)) {
       return value;
@@ -923,6 +1056,7 @@ export class PerpsCommand {
     after?: string;
     before?: string;
     limit: string;
+    export?: string;
   }): Promise<void> {
     if (opts.address && opts.key) {
       throw new Error("Only one of --address or --key can be provided.");
@@ -947,6 +1081,18 @@ export class PerpsCommand {
       opts.address ??
       (await Signer.loadAddress(opts.key ?? Config.load().activeKey));
     const mint = opts.asset ? resolveAsset(opts.asset).id : undefined;
+
+    if (opts.export) {
+      const csv = await PerpsClient.exportTrades(address);
+      writeFileSync(opts.export, csv);
+      const trades = csv.trim().split("\n").length - 1;
+      if (Output.isJson()) {
+        Output.json({ path: opts.export, trades });
+      } else {
+        console.log(`Exported ${trades} trades to ${opts.export}`);
+      }
+      return;
+    }
 
     const res = await PerpsClient.getTrades({
       walletAddress: address,

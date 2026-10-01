@@ -70,6 +70,9 @@ jup perps history --after 2026-03-01 --before 2026-03-15
 
 # Limit results (default: 20)
 jup perps history --limit 5
+
+# Export the full trade history as CSV (same file as the web's export)
+jup perps history --address <wallet-address> --export trades.csv
 ```
 
 - Shows past trades (opens, closes) with PnL and fees
@@ -95,6 +98,12 @@ jup perps history --limit 5
     }
   ]
 }
+
+// Example JSON response (--export):
+{
+  "path": "trades.csv",
+  "trades": 41 // rows written
+}
 ```
 
 ### List markets
@@ -112,7 +121,15 @@ jup perps markets
     "changePct24h": 2.35, // percentage; 2.35 means +2.35%
     "highUsd24h": 88.10,
     "lowUsd24h": 84.50,
-    "volumeUsd24h": 1250000
+    "volumeUsd24h": 1250000,
+    "openFeePct": 0.06, // percentage of size charged on open/close
+    "maxPriceImpactFeePct": 0.44,
+    "longBorrowRatePctPerHour": 0.0016, // hourly borrow rate paid by longs
+    "shortBorrowRatePctPerHour": 0.0007,
+    "longAvailableLiquidityUsd": 10000000, // max new long size right now
+    "shortAvailableLiquidityUsd": 10000000,
+    "longUtilizationPct": 13.8,
+    "shortUtilizationPct": 61.68
   }
 ]
 ```
@@ -178,7 +195,7 @@ jup perps open --asset SOL --side long --amount 0.2 --leverage 2 --dry-run
 }
 ```
 
-### Update TP/SL or limit order
+### Update TP/SL, collateral, or limit order
 
 ```bash
 # Set or update take-profit on a position
@@ -190,6 +207,16 @@ jup perps set --position <pubkey> --sl 70
 # Set both TP and SL
 jup perps set --position <pubkey> --tp 100 --sl 70
 
+# Partial TP/SL: close only $50 of size at the trigger (stackable)
+jup perps set --position <pubkey> --tp 110 --size 50
+
+# Add collateral (lowers leverage); amount is in --input token units
+jup perps set --position <pubkey> --add-collateral 0.5
+jup perps set --position <pubkey> --add-collateral 20 --input USDC
+
+# Remove $25 of collateral (raises leverage)
+jup perps set --position <pubkey> --remove-collateral 25 --receive USDC
+
 # Update a limit order's trigger price
 jup perps set --order <pubkey> --limit 64000
 
@@ -198,6 +225,9 @@ jup perps set --position <pubkey> --tp 100 --sl 70 --dry-run
 ```
 
 - Get the `positionPubkey` or `orderPubkey` from `jup perps positions`
+- Without `--size`, `--tp`/`--sl` update the whole-position TP/SL if one exists, otherwise create it. With `--size`, a new partial TP/SL is always created; a position can hold several, up to a server limit (the error says how many).
+- `--add-collateral` and `--remove-collateral` keep the position size unchanged. `--input`/`--receive` default to the position's collateral token. Amounts outside the server's per-position limits are rejected with the allowed range.
+- A limit order's size cannot be edited (the web app doesn't allow it either): cancel and re-open instead.
 - `--dry-run` previews the update without signing. JSON response includes the unsigned base64 `transaction` for each update.
 
 ```js
@@ -216,15 +246,30 @@ jup perps set --position <pubkey> --tp 100 --sl 70 --dry-run
       "type": "tp",
       "action": "created", // or "updated"
       "triggerPriceUsd": 100,
+      "sizeUsd": null, // USD size closed by a partial TP/SL; null = whole position
       "signature": "3dV9...8zG1"
     },
     {
       "type": "sl",
       "action": "created",
       "triggerPriceUsd": 70,
+      "sizeUsd": null,
       "signature": "7kM2...4pQ3"
     }
   ]
+}
+
+// Example JSON response (add/remove collateral):
+{
+  "action": "remove-collateral", // or "add-collateral"
+  "positionPubkey": "3qMZ...83tz",
+  "collateralUsd": 8487.41, // collateral after the change
+  "collateralDeltaUsd": -300, // negative when removing
+  "leverage": 34.55, // leverage after the change
+  "liquidationPriceUsd": 114.27,
+  "received": "74.07 USDC", // null when adding; accrued borrow fees are settled first
+  "feeUsd": 225.93,
+  "signature": "5YhT...9AKU"
 }
 ```
 
@@ -248,6 +293,9 @@ jup perps close --order <pubkey>
 
 # Cancel a TP/SL order
 jup perps close --tpsl <pubkey>
+
+# Close all expired limit orders and reclaim their deposits
+jup perps close --order expired
 
 # Dry-run
 jup perps close --position <pubkey> --dry-run
@@ -275,6 +323,13 @@ jup perps close --position <pubkey> --dry-run
 {
   "action": "close-all",
   "signatures": ["5YhT...9AKU", "3Cn8...diEc"]
+}
+
+// Example JSON response (close expired orders):
+{
+  "action": "close-expired-orders",
+  "orders": ["9fGh...4kLm"], // expired order pubkeys, empty if none
+  "signatures": ["4wYb...drLf"] // sent straight to Solana via your RPC (config set --rpc-url)
 }
 
 // Example JSON response (cancel order):
@@ -325,8 +380,8 @@ jup perps history --asset SOL --limit 10
 
 ### Add collateral to reduce leverage
 
-There is no dedicated deposit collateral command. Instead, open on the same asset/side with minimum leverage:
-
 ```bash
-jup perps open --asset BTC --side long --amount 10 --input USDC --leverage 1.1
+jup perps positions
+# Copy the positionPubkey
+jup perps set --position <pubkey> --add-collateral 10 --input USDC
 ```

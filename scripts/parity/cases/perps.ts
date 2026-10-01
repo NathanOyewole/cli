@@ -12,7 +12,9 @@ type LivePosition = {
   positionPubkey: string;
   asset: string;
   side: string;
+  sizeUsd: string;
   collateralToken: string;
+  collateralMint: string;
   tpslRequests: {
     positionRequestPubkey: string;
     requestType: string;
@@ -56,7 +58,9 @@ function traders(): Promise<Trader[]> {
       const board = await get<{
         topTradersByVolume: { owner: string }[];
         topTradersByPnl: { owner: string }[];
-      }>(`top-traders?marketMint=${mint}&year=2026&week=current`);
+      }>(
+        `top-traders?marketMint=${mint}&year=${new Date().getUTCFullYear()}&week=current`
+      );
       [...board.topTradersByPnl, ...board.topTradersByVolume]
         .slice(0, 15)
         .forEach((t) => owners.add(t.owner));
@@ -140,6 +144,87 @@ const tpFor = (hasTp: boolean) => async () => {
     WALLET: trader.wallet,
     POSITION: position.positionPubkey,
     TP: fmt(position.side === "long" ? price * 1.5 : price * 0.5),
+  };
+};
+
+type CollateralLimits = Record<string, string>;
+const DECIMALS: Record<string, number> = { SOL: 9, BTC: 8, ETH: 8, USDC: 6 };
+
+async function rpc<T>(method: string, params: unknown[]): Promise<T> {
+  const res = await fetch(
+    process.env.RPC_URL ?? "https://api.mainnet-beta.solana.com",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    }
+  );
+  return ((await res.json()) as { result: T }).result;
+}
+
+async function balanceOf(wallet: string, mint: string): Promise<bigint> {
+  if (mint === MINT_BY_ASSET.SOL) {
+    return BigInt((await rpc<{ value: number }>("getBalance", [wallet])).value);
+  }
+  const { value } = await rpc<{
+    value: {
+      account: {
+        data: { parsed: { info: { tokenAmount: { amount: string } } } };
+      };
+    }[];
+  }>("getTokenAccountsByOwner", [wallet, { mint }, { encoding: "jsonParsed" }]);
+  return value.reduce(
+    (sum, a) => sum + BigInt(a.account.data.parsed.info.tokenAmount.amount),
+    0n
+  );
+}
+
+// A position plus a collateral amount inside the server's limits that the
+// owner's wallet can actually fund.
+const withCollateral = (kind: "deposit" | "withdraw") => async () => {
+  for (const trader of await traders()) {
+    for (const p of trader.positions) {
+      const decimals = DECIMALS[p.collateralToken];
+      if (decimals === undefined) {
+        continue;
+      }
+      const limits = await get<CollateralLimits>(
+        `positions/collateral-limits?inputMint=${p.collateralMint}&positionPubkey=${p.positionPubkey}`
+      );
+      if (kind === "withdraw") {
+        const min = Number(limits.minCollateralWithdrawalUsd) / 1e6;
+        const max = Number(limits.maxCollateralWithdrawalUsd) / 1e6;
+        if (min * 1.2 <= max) {
+          return {
+            WALLET: trader.wallet,
+            POSITION: p.positionPubkey,
+            AMOUNT: fmt(min * 1.2),
+          };
+        }
+        continue;
+      }
+      const min = BigInt(limits.minCollateralDepositTokenAmount!);
+      const amount = (min * 12n) / 10n;
+      if ((await balanceOf(trader.wallet, p.collateralMint)) > amount * 2n) {
+        return {
+          WALLET: trader.wallet,
+          POSITION: p.positionPubkey,
+          AMOUNT: (Number(amount) / 10 ** decimals).toFixed(decimals),
+        };
+      }
+    }
+  }
+  throw new Error(`no leaderboard position allows a collateral ${kind}`);
+};
+
+const withPartialTp = async () => {
+  const { trader, position } = await findPosition();
+  const price = await priceOf(MINT_BY_ASSET[position.asset]!);
+  return {
+    WALLET: trader.wallet,
+    POSITION: position.positionPubkey,
+    TP: fmt(position.side === "long" ? price * 1.5 : price * 0.5),
+    SIZE: fmt(Number(position.sizeUsd) / 1e6 / 10),
   };
 };
 
@@ -308,5 +393,93 @@ export const cases: ParityCase[] = [
     kind: "tx",
     args: ["perps", "close", "--tpsl", "$TPSL"],
     resolve: withTpsl,
+  },
+  {
+    id: "pool-info",
+    feature: "perps-direction",
+    kind: "read",
+    args: ["perps", "markets"],
+    expect: (json) =>
+      Array.isArray(json) &&
+      json.every(
+        (m) => typeof m.openFeePct === "number" && m.longBorrowRatePctPerHour
+      ),
+  },
+  {
+    id: "add-collateral",
+    feature: "perps-positions",
+    kind: "tx",
+    args: [
+      "perps",
+      "set",
+      "--position",
+      "$POSITION",
+      "--add-collateral",
+      "$AMOUNT",
+    ],
+    resolve: withCollateral("deposit"),
+  },
+  {
+    id: "remove-collateral",
+    feature: "perps-positions",
+    kind: "tx",
+    args: [
+      "perps",
+      "set",
+      "--position",
+      "$POSITION",
+      "--remove-collateral",
+      "$AMOUNT",
+    ],
+    resolve: withCollateral("withdraw"),
+  },
+  {
+    id: "partial-tp",
+    feature: "perps-order",
+    kind: "tx",
+    args: [
+      "perps",
+      "set",
+      "--position",
+      "$POSITION",
+      "--tp",
+      "$TP",
+      "--size",
+      "$SIZE",
+    ],
+    resolve: withPartialTp,
+  },
+  {
+    id: "edit-limit-order-size",
+    feature: "perps-order",
+    kind: "unsupported",
+    reason:
+      "web disables it (size field commented out in PerpsEditOpenOrderForm.tsx) and PATCH /orders/limit ignores sizeUsdDelta on v1 and v2; only the trigger price can change",
+  },
+  {
+    // No leaderboard wallet had an expired order (467 scanned), so this checks
+    // the request path; the server builds one tx per expired order when present.
+    id: "close-expired-orders",
+    feature: "perps-positions",
+    kind: "read",
+    args: ["--dry-run", "perps", "close", "--order", "expired"],
+    resolve: withPosition(),
+    expect: (json) =>
+      Array.isArray((json as { transactions?: unknown }).transactions),
+  },
+  {
+    id: "history-export",
+    feature: "perps-positions",
+    kind: "read",
+    args: [
+      "perps",
+      "history",
+      "--address",
+      WALLET,
+      "--export",
+      "/tmp/jup-parity-perps-trades.csv",
+    ],
+    resolve: withPosition(),
+    expect: (json) => ((json as { trades?: number }).trades ?? 0) > 0,
   },
 ];
