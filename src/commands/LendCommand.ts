@@ -17,6 +17,7 @@ import { Output } from "../lib/Output.ts";
 import { Signer } from "../lib/Signer.ts";
 import { Swap } from "../lib/Swap.ts";
 import { LendBorrowCommand } from "./LendBorrowCommand.ts";
+import { LendMultiplyCommand } from "./LendMultiplyCommand.ts";
 import { LendToolsCommand } from "./LendToolsCommand.ts";
 
 const EARN_COMPUTE_UNITS = 300_000;
@@ -96,6 +97,7 @@ export class LendCommand {
       .action((opts) => this.chart(opts));
 
     LendBorrowCommand.register(lend);
+    LendMultiplyCommand.register(lend);
     LendToolsCommand.register(lend);
   }
 

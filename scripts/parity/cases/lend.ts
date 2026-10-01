@@ -7,6 +7,7 @@ const PYUSD_HOLDER = "4AK83Vf82d1Q1zNsho5RSqHvBgkU7UvrKJCSz2bjdV3m";
 const ETHENA_EARN_HOLDER = "C23FGxQB2LsoTbZsQr5w3R7b3sw5saxPLGJ4ujvyH34L"; // jlePYUSD
 // Found via api.solana.fluid.io v2 borrowing/positions.
 const BORROWER = "8RBYhetLKzr9ju9H2wDJ9W77dbCZXCPTKTK6KGfMv86n"; // vault 1 (SOL/USDC) position 10062
+const JUPSOL_HOLDER = "3rfeoFgH8qYW1jRMjbLn1jCrotEBxeeYZ44Fqap5W3xj"; // margin for vault 4 (JupSOL/SOL)
 const SOL_DEBT_BORROWER = "4opUjMGDNp15NF5UiEcuSSuuWYMyLy4bkJXrTWhPQRtb"; // vault 5 (JitoSOL/SOL) position 719, holds enough SOL to repay
 
 const nonEmpty = (key: string) => (json: unknown) =>
@@ -211,8 +212,8 @@ export const cases: ParityCase[] = [
     id: "borrow-repay",
     feature: "lend-borrow",
     kind: "tx",
-    args: ["lend", "borrow", "repay", "--position", "10062", "--amount", "10"],
-    wallet: BORROWER,
+    args: ["lend", "borrow", "repay", "--position", "719", "--amount", "0.01"],
+    wallet: SOL_DEBT_BORROWER,
   },
   {
     id: "borrow-withdraw",
@@ -238,13 +239,13 @@ export const cases: ParityCase[] = [
       "borrow",
       "operate",
       "--position",
-      "10062",
+      "719",
       "--repay",
-      "5",
+      "0.01",
       "--withdraw",
-      "0.5",
+      "0.01",
     ],
-    wallet: BORROWER,
+    wallet: SOL_DEBT_BORROWER,
   },
   {
     id: "borrow-repay-all-sol",
@@ -330,5 +331,73 @@ export const cases: ParityCase[] = [
     kind: "unsupported",
     reason:
       "refinance reads Kamino/Marginfi/Save positions from an internal portfolio API that needs a private bearer token (NEXT_PUBLIC_LEND_PORTFOLIO_API_BEARER, not public)",
+  },
+
+  {
+    id: "multiply-vaults",
+    feature: "lend-multiply-smart",
+    kind: "read",
+    args: ["lend", "multiply", "vaults"],
+    expect: nonEmpty("vaults"),
+  },
+  {
+    id: "smart-vaults",
+    feature: "lend-multiply-smart",
+    kind: "read",
+    args: ["lend", "borrow", "vaults", "--smart"],
+    expect: nonEmpty("vaults"),
+  },
+  {
+    id: "multiply-open",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: [
+      "lend",
+      "multiply",
+      "open",
+      "--vault",
+      "4",
+      "--amount",
+      "1",
+      "--leverage",
+      "3",
+    ],
+    wallet: JUPSOL_HOLDER,
+  },
+  {
+    id: "multiply-leverage-up",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: ["lend", "multiply", "set", "--position", "10062", "--leverage", "2"],
+    wallet: BORROWER,
+  },
+  {
+    id: "multiply-deleverage",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: [
+      "lend",
+      "multiply",
+      "set",
+      "--position",
+      "10062",
+      "--leverage",
+      "1.1",
+    ],
+    wallet: BORROWER,
+  },
+  {
+    id: "multiply-close",
+    feature: "lend-multiply-smart",
+    kind: "tx",
+    args: ["lend", "multiply", "close", "--position", "10062"],
+    wallet: BORROWER,
+  },
+  {
+    id: "smart-vault-operate",
+    feature: "lend-multiply-smart",
+    kind: "unsupported",
+    reason:
+      "smart (DEX) vault deposit/borrow/repay/withdraw, Smart Earn and Smart Multiply: lite-api lend/v1/borrow/operate rejects DEX vaults ('use getOperateDexIx from @jup-ag/lend/smart-vaults'); that SDK path needs @coral-xyz/anchor + @solana/web3.js (well over the 500 KB budget) plus its DEX share/slippage math",
   },
 ];

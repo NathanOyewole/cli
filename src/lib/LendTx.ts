@@ -10,6 +10,8 @@ import {
   fetchAddressesForLookupTables,
   getBase64EncodedWireTransaction,
   getBase64Encoder,
+  getCompiledTransactionMessageDecoder,
+  getTransactionDecoder,
   getU32Encoder,
   getU64Encoder,
   pipe,
@@ -174,6 +176,25 @@ export class LendTx {
       (m) => compressTransactionMessageUsingAddressLookupTables(m, tables)
     );
     return getBase64EncodedWireTransaction(compileTransaction(message));
+  }
+
+  // Solana's packet size and per-transaction account lock limits.
+  public static fits(transaction: string): boolean {
+    const bytes = getBase64Encoder().encode(transaction);
+    if (bytes.length > 1232) {
+      return false;
+    }
+    const message = getCompiledTransactionMessageDecoder().decode(
+      getTransactionDecoder().decode(bytes).messageBytes
+    );
+    const lookups =
+      "addressTableLookups" in message
+        ? (message.addressTableLookups ?? []).reduce(
+            (n, l) => n + l.readonlyIndexes.length + l.writableIndexes.length,
+            0
+          )
+        : 0;
+    return message.staticAccounts.length + lookups <= 64;
   }
 
   public static async signAndSend(

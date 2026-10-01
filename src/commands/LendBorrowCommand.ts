@@ -17,7 +17,7 @@ import { Output } from "../lib/Output.ts";
 import { Signer } from "../lib/Signer.ts";
 
 // Operate treats i128::MIN as "the whole balance" for withdraw and repay.
-const MAX_SENTINEL = "-170141183460469231731687303715884105728";
+export const MAX_SENTINEL = "-170141183460469231731687303715884105728";
 const OPERATE_COMPUTE_UNITS = 500_000;
 // Interest accrued between building and landing a full repay; the jup.ag UI
 // budgets an hour of borrow APY on top of the debt.
@@ -833,7 +833,7 @@ export class LendBorrowCommand {
     return owed + BigInt(Math.ceil(interest)) + 10_000n;
   }
 
-  private static printOperate(
+  public static printOperate(
     r: {
       action: string;
       vaultId: number;
@@ -844,6 +844,7 @@ export class LendBorrowCommand {
       liquidationLtvPct: number;
       liquidationPrice: number | null;
       healthStatus: string | null;
+      leverage?: number;
     },
     signature: string | null
   ): void {
@@ -871,13 +872,16 @@ export class LendBorrowCommand {
               ? "—"
               : `${this.formatAmount(r.liquidationPrice)} ${r.debt.token.symbol} per ${r.collateral.token.symbol}`,
         },
+        ...(r.leverage === undefined
+          ? []
+          : [{ label: "Leverage", value: `${r.leverage}x` }]),
         { label: "Health", value: r.healthStatus ?? "—" },
         ...(signature ? [{ label: "Tx Signature", value: signature }] : []),
       ],
     });
   }
 
-  private static sideInfo(side: VaultSide) {
+  public static sideInfo(side: VaultSide) {
     if (side.token1) {
       return {
         id: `${side.token0.address},${side.token1.address}`,
