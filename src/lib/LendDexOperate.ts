@@ -577,12 +577,14 @@ export class LendDexOperate {
         ),
       (m) => appendTransactionMessageInstruction(ix, m)
     );
-    const { value } = await createSolanaRpc(Rpc.url)
-      .simulateTransaction(
-        getBase64EncodedWireTransaction(compileTransaction(message)),
-        { encoding: "base64", sigVerify: false, replaceRecentBlockhash: true }
-      )
-      .send();
+    const { value } = await withRetry(() =>
+      createSolanaRpc(Rpc.url)
+        .simulateTransaction(
+          getBase64EncodedWireTransaction(compileTransaction(message)),
+          { encoding: "base64", sigVerify: false, replaceRecentBlockhash: true }
+        )
+        .send()
+    );
     const data = value.returnData?.data[0];
     if (!data) {
       throw new Error(
@@ -1356,15 +1358,29 @@ async function fetchMany(
   const found = new Map<Address, Uint8Array | null>();
   for (let i = 0; i < wanted.length; i += 100) {
     const chunk = wanted.slice(i, i + 100);
-    const { value } = await rpc
-      .getMultipleAccounts(chunk, { encoding: "base64" })
-      .send();
+    const { value } = await withRetry(() =>
+      rpc.getMultipleAccounts(chunk, { encoding: "base64" }).send()
+    );
     chunk.forEach((a, j) => {
       const account = value[j];
       found.set(a, account ? fromBase64(account.data[0]) : null);
     });
   }
   return addresses.map((a) => (a === null ? null : (found.get(a) ?? null)));
+}
+
+// The build makes a dozen small reads; public RPCs rate-limit bursts.
+async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= 4 || !String(err).includes("429")) {
+        throw err;
+      }
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+    }
+  }
 }
 
 function fromBase64(base64: string): Uint8Array {
