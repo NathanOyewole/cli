@@ -262,7 +262,7 @@ export const cases: ParityCase[] = [
     feature: "gacha-packs",
     kind: "unsupported",
     reason:
-      "Phygitals and Beezie packs (and multi-platform buy/inventory/buyback) live only on api.jup.ag/gacha/v2, which answers 403 'Endpoint access not available for this organization' to any key but the web app's gacha-specific one; Collector Crypt packs work through tcgapi.jup.ag/v1",
+      "Phygitals and Beezie packs (and multi-platform buy/inventory/buyback) live only on api.jup.ag/gacha/v2, which answers 403 'Endpoint access not available for this organization' without the web app's gacha-specific key (no key and a non-gacha key both get 403); Collector Crypt packs work through tcgapi.jup.ag/v1",
   },
   {
     id: "gacha-marketplace",
