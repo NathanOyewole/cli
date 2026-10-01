@@ -311,8 +311,15 @@ export const cases: ParityCase[] = [
   {
     id: "dca-close-v1",
     feature: "recurring-interval",
-    kind: "unsupported",
-    reason:
-      "V1 DCA close needs a client-built tx (@jup-ag/dca-sdk) sent via RPC; CLI errors with a pointer to jup.ag",
+    kind: "tx",
+    wallet: V1_DCA_WALLET,
+    args: [
+      "spot",
+      "dca",
+      "close",
+      "--v1",
+      "--order",
+      "4qxwzMs2ATDbkYZse5LZZbDuS6DvpTs7FwX2Y8sUaySW",
+    ],
   },
 ];

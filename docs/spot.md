@@ -229,7 +229,7 @@ Limit orders are held in a per-wallet Jupiter vault and filled by Jupiter when t
 
 #### Sign-in
 
-Limit order and DCA commands (except `--v1` lists and `limit close --v1`) sign in to the Jupiter Trigger API by signing a text challenge with your key. This is a message signature, not a transaction. The session is cached in `~/.config/jup/auth/<address>.json` (mode 0600) and refreshed automatically. `--dry-run` still signs this challenge, and `open` registers your vault on first use, but no transaction is signed or submitted.
+Limit order and DCA commands (except the `--v1` commands) sign in to the Jupiter Trigger API by signing a text challenge with your key. This is a message signature, not a transaction. The session is cached in `~/.config/jup/auth/<address>.json` (mode 0600) and refreshed automatically. `--dry-run` still signs this challenge, and `open` registers your vault on first use, but no transaction is signed or submitted.
 
 #### Place a limit order
 
@@ -492,7 +492,7 @@ jup spot dca close --order <orderId> --dry-run
 ```
 
 - `--dry-run` requests and returns the unsigned withdrawal `transaction` without confirming the cancel
-- Legacy V1 DCA orders cannot be closed from the CLI (`close --v1` errors): their close transaction must be built client-side with the DCA program SDK. Close them on [jup.ag/recurring](https://jup.ag/recurring)
+- Legacy V1 DCA orders are closed with `jup spot dca close --v1 --order <order-account>`. The CLI builds the close transaction itself and sends it through your RPC (`jup config set --rpc-url`); unspent input and bought tokens return to your wallet, and wrapped SOL is unwrapped.
 
 ```js
 // Example JSON response:

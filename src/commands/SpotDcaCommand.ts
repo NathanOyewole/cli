@@ -1,4 +1,4 @@
-import type { Base64EncodedBytes } from "@solana/kit";
+import { address, isAddress, type Base64EncodedBytes } from "@solana/kit";
 import chalk from "chalk";
 import type { Command } from "commander";
 
@@ -10,9 +10,11 @@ import {
 } from "../clients/TriggerClient.ts";
 import { resolveWalletAsset } from "../lib/Asset.ts";
 import { Config } from "../lib/Config.ts";
+import { DcaV1 } from "../lib/DcaV1.ts";
 import { NumberConverter } from "../lib/NumberConverter.ts";
 import { OrderTokens, toTokenRef, type TokenRef } from "../lib/OrderTokens.ts";
 import { Output } from "../lib/Output.ts";
+import { Rpc } from "../lib/Rpc.ts";
 import { Signer } from "../lib/Signer.ts";
 import { Swap } from "../lib/Swap.ts";
 import {
@@ -99,7 +101,10 @@ export class SpotDcaCommand {
     dca
       .command("close")
       .description("Cancel a recurring order and withdraw the unspent balance")
-      .requiredOption("--order <id>", "Order ID to cancel")
+      .requiredOption(
+        "--order <id>",
+        "Order ID to cancel (the order account address with --v1)"
+      )
       .option("--v1", "Cancel a legacy V1 recurring order")
       .option("--key <name>", "Key to use for signing")
       .action((opts) => this.close(opts));
@@ -357,12 +362,10 @@ export class SpotDcaCommand {
     v1?: boolean;
     key?: string;
   }): Promise<void> {
-    if (opts.v1) {
-      throw new Error(
-        "Closing V1 recurring orders is not supported by the CLI: the transaction must be built client-side with the DCA program SDK. Close it at https://jup.ag/recurring instead."
-      );
-    }
     const signer = await Signer.load(opts.key ?? Config.load().activeKey);
+    if (opts.v1) {
+      return this.closeV1(signer, opts.order);
+    }
     const order = await TriggerClient.getDcaOrder(signer, opts.order);
     const tokens = await OrderTokens.load([order.inputMint]);
     const cancel = await TriggerClient.cancelOrder(signer, "dca", order.id);
@@ -409,6 +412,41 @@ export class SpotDcaCommand {
           label: "Withdraw",
           value: `${refundAmount ?? "?"} ${tokens.symbol(order.inputMint)}`,
         },
+        ...(signature ? [{ label: "Tx Signature", value: signature }] : []),
+      ],
+    });
+  }
+
+  private static async closeV1(signer: Signer, order: string): Promise<void> {
+    if (!isAddress(order)) {
+      throw new Error("--order must be the V1 order account address.");
+    }
+    const transaction = await DcaV1.buildCloseTransaction(
+      address(signer.address),
+      order
+    );
+    const signature = Config.dryRun
+      ? null
+      : await Rpc.sendAndConfirm(
+          await signer.signTransaction(transaction as Base64EncodedBytes)
+        );
+
+    if (Output.isJson()) {
+      Output.json({
+        ...(Config.dryRun && { dryRun: true }),
+        orderId: order,
+        signature,
+        ...(Config.dryRun && { transaction }),
+      });
+      return;
+    }
+    if (Config.dryRun) {
+      console.log(Output.DRY_RUN_LABEL);
+    }
+    Output.table({
+      type: "vertical",
+      rows: [
+        { label: "Order", value: order },
         ...(signature ? [{ label: "Tx Signature", value: signature }] : []),
       ],
     });
