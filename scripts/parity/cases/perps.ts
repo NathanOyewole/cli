@@ -1,9 +1,15 @@
 import {
   address,
+  getAddressDecoder,
   getAddressEncoder,
+  getBase58Decoder,
   getProgramDerivedAddress,
 } from "@solana/kit";
 
+import {
+  decodeUserBundle,
+  userAccountAddress,
+} from "../../../src/lib/DeltaNeutralVault.ts";
 import { decodeActiveStake } from "../../../src/lib/JupStake.ts";
 import { WALLET, type ParityCase } from "../types.ts";
 
@@ -404,6 +410,77 @@ const withJtxTrader =
 // Opening needs USDC for collateral and the 69 JUP private-beta stake.
 const canOpenJtx = (t: JtxTrader) =>
   t.usdc >= 15_000_000n && t.stakedJup >= 69_000_000n;
+
+const NT_BUNDLE = address("BUNDeH5A4c47bcEoAjBhN3sCjLgYnRsmt9ibMztqVkC9");
+
+let vaultUsersPromise:
+  | Promise<{ wallet: string; shares: bigint }[]>
+  | undefined;
+
+// Depositors of the JLP Delta Neutral vault: every ntbundle user account
+// (owner at offset 8) whose PDA matches this vault.
+function vaultUsers() {
+  vaultUsersPromise ??= (async () => {
+    const accounts = await rpc<
+      { pubkey: string; account: { data: [string, string] } }[]
+    >("getProgramAccounts", [
+      NT_BUNDLE,
+      {
+        encoding: "base64",
+        filters: [
+          {
+            memcmp: {
+              offset: 0,
+              bytes: getBase58Decoder().decode(
+                Uint8Array.from([32, 181, 106, 26, 67, 130, 185, 241])
+              ),
+            },
+          },
+        ],
+        dataSlice: { offset: 8, length: 32 },
+      },
+    ]);
+    const users: { wallet: string; shares: bigint }[] = [];
+    for (const { pubkey, account } of accounts) {
+      const owner = getAddressDecoder().decode(
+        Buffer.from(account.data[0], "base64")
+      );
+      if ((await userAccountAddress(owner)) !== pubkey || users.length >= 20) {
+        continue;
+      }
+      const info = await rpc<{ value: { data: [string, string] } | null }>(
+        "getAccountInfo",
+        [pubkey, { encoding: "base64" }]
+      );
+      if (info.value) {
+        users.push({
+          wallet: owner,
+          shares: decodeUserBundle(Buffer.from(info.value.data[0], "base64"))
+            .shares,
+        });
+      }
+    }
+    return users;
+  })();
+  return vaultUsersPromise;
+}
+
+const withVaultShares = async () => {
+  const user = (await vaultUsers()).find((u) => u.shares > 20_000_000n);
+  if (!user) {
+    throw new Error("no delta neutral depositor with over 20 shares");
+  }
+  return { WALLET: user.wallet };
+};
+
+const withVaultUsdc = async () => {
+  for (const user of await vaultUsers()) {
+    if ((await balanceOf(user.wallet, USDC_MINT)) >= 11_000_000n) {
+      return { WALLET: user.wallet };
+    }
+  }
+  throw new Error("no delta neutral depositor holds 11 USDC");
+};
 
 const hasItems = (key: string) => (json: unknown) =>
   Array.isArray((json as Record<string, unknown>)[key]) &&
@@ -937,5 +1014,61 @@ export const cases: ParityCase[] = [
       }
       throw new Error("no recent JTX wallet has free collateral");
     },
+  },
+  {
+    id: "delta-neutral-info",
+    feature: "perps-jlp",
+    kind: "read",
+    args: ["perps", "delta-neutral", "info"],
+    expect: (json) =>
+      typeof (json as { tvlUsd?: unknown }).tvlUsd === "number" &&
+      typeof (json as { apyPct?: unknown }).apyPct === "number",
+  },
+  {
+    id: "delta-neutral-history",
+    feature: "perps-jlp",
+    kind: "read",
+    args: ["perps", "delta-neutral", "history", "--days", "7"],
+    expect: hasItems("snapshots"),
+  },
+  {
+    id: "delta-neutral-positions",
+    feature: "perps-jlp",
+    kind: "read",
+    args: ["perps", "delta-neutral", "positions", "--address", WALLET],
+    resolve: withVaultShares,
+    expect: (json) =>
+      ((json as { position?: { balanceUsd?: number } }).position?.balanceUsd ??
+        0) > 0,
+  },
+  {
+    id: "delta-neutral-deposit",
+    feature: "perps-jlp",
+    kind: "tx",
+    args: ["perps", "delta-neutral", "deposit", "--amount", "11"],
+    resolve: withVaultUsdc,
+  },
+  {
+    // A wallet with no vault account gets initializeBundleDepositor first.
+    id: "delta-neutral-first-deposit",
+    feature: "perps-jlp",
+    kind: "tx",
+    args: ["perps", "delta-neutral", "deposit", "--amount", "11"],
+    resolve: async () => {
+      const users = new Set((await vaultUsers()).map((u) => u.wallet));
+      for (const t of await jtxTraders()) {
+        if (!users.has(t.wallet) && t.usdc >= 11_000_000n) {
+          return { WALLET: t.wallet };
+        }
+      }
+      throw new Error("no USDC holder without a vault account");
+    },
+  },
+  {
+    id: "delta-neutral-withdraw",
+    feature: "perps-jlp",
+    kind: "tx",
+    args: ["perps", "delta-neutral", "withdraw", "--amount", "10"],
+    resolve: withVaultShares,
   },
 ];

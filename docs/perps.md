@@ -1,6 +1,6 @@
 # Perpetual Futures Trading
 
-Requires: an active key for write commands. Read commands (`markets`, `jlp info`, `loans info`, `leaderboard`, and `positions`/`history`/`stats`/`loans positions`/`loans history` with `--address`) need none. See [setup](setup.md).
+Requires: an active key for write commands. Read commands (`markets`, `leaderboard`, the `info`/`markets`/`orderbook`/`history` reads of `jlp`, `loans`, `jtx`, and `delta-neutral`, and any `positions`/`history`/`stats` with `--address`) need none. See [setup](setup.md).
 
 ## Markets
 
@@ -473,6 +473,73 @@ jup perps loans repay --amount max --withdraw max
   "debtAmount": 5, // USDC owed after this change
   "ltvPct": 10.33,
   "liquidationPriceUsd": 0.5263,
+  "signature": "5YhT...9AKU"
+}
+```
+
+### JLP Delta Neutral vault
+
+A USDC vault run by Neutral Trade that holds JLP with its price exposure hedged. Deposits and withdrawals are requests: the manager processes them daily at 07:00 UTC, deposits are locked for 24h, and withdrawals are paid out after a 72h redeem lock. The CLI builds these transactions itself (the program's Anchor instructions, as the web app does) and sends them straight to Solana through your RPC.
+
+```bash
+jup perps delta-neutral info
+jup perps delta-neutral history --days 30   # or --days all
+jup perps delta-neutral positions [--key <name> | --address <wallet>]
+
+jup perps delta-neutral deposit --amount 100   # USDC, minimum 10
+jup perps delta-neutral withdraw --amount 50   # USD value, minimum 10
+jup perps delta-neutral withdraw --amount max
+```
+
+```js
+// Example JSON response (info):
+{
+  "vaultId": 69,
+  "name": "JLP Delta Neutral(Jupiter)",
+  "vaultAddress": "GiNbTRuRqvVGEEQGZKMjmwX84LrsbqfzVVNtWYbcZPCY",
+  "depositToken": "USDC",
+  "apyPct": 0.19, // after fees
+  "aprPct": 0.19,
+  "tvlUsd": 13707.37,
+  "tvlCapUsd": 2000000,
+  "sharePriceUsd": 1.000873,
+  "roiPct": 0.62,
+  "roiSince": "2025-12-15T00:00:00.000Z",
+  "maxDrawdownPct": 1.13,
+  "sharpeRatio": -1.74,
+  "minDepositUsd": 10,
+  "minWithdrawUsd": 10,
+  "depositLockHours": 24,
+  "redeemLockHours": 72,
+  "processTimeUtc": "07:00",
+  "allocations": [{ "name": "Jupiter", "ratioPct": 92.73, "tvlUsd": 12707.9 }]
+}
+
+// Example JSON response (history):
+{
+  "snapshots": [{ "date": "2026-09-30", "tvlUsd": 13703.94, "sharePriceUsd": 1.005948 }]
+}
+
+// Example JSON response (positions); "position" is null without a vault account:
+{
+  "position": {
+    "shares": 50.008364,
+    "balanceUsd": 50.052,
+    "pendingDepositUsd": 0, // waiting for the next daily processing
+    "pendingWithdrawalUsd": 0,
+    "netDepositsUsd": 50,
+    "earningsUsd": 0.052,
+    "feesPaidUsd": 0.064668,
+    "withdrawalAvailableAt": null // ISO time a pending withdrawal unlocks
+  }
+}
+
+// Example JSON response (deposit; withdraw returns "withdraw-request" plus "shares"):
+{
+  "action": "deposit-request",
+  "amountUsd": 100,
+  "note": "Pending until the next daily processing at 07:00 UTC; locked for 24h after.",
+  "vaultAddress": "GiNbTRuRqvVGEEQGZKMjmwX84LrsbqfzVVNtWYbcZPCY",
   "signature": "5YhT...9AKU"
 }
 ```

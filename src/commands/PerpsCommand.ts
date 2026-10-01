@@ -12,6 +12,7 @@ import { Output } from "../lib/Output.ts";
 import { PerpsTx } from "../lib/PerpsTx.ts";
 import { Signer } from "../lib/Signer.ts";
 import { PerpsCollateral } from "./PerpsCollateral.ts";
+import { PerpsDeltaNeutralCommand } from "./PerpsDeltaNeutralCommand.ts";
 import { PerpsJlpCommand } from "./PerpsJlpCommand.ts";
 import { PerpsJtxCommand } from "./PerpsJtxCommand.ts";
 import { PerpsLeaderboardCommand } from "./PerpsLeaderboardCommand.ts";
@@ -123,6 +124,7 @@ export class PerpsCommand {
     PerpsLoansCommand.register(perps);
     PerpsLeaderboardCommand.register(perps);
     PerpsJtxCommand.register(perps);
+    PerpsDeltaNeutralCommand.register(perps);
   }
 
   private static async positions(opts: {
