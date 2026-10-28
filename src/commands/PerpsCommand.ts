@@ -8,6 +8,7 @@ import { Config } from "../lib/Config.ts";
 import { NumberConverter } from "../lib/NumberConverter.ts";
 import { Output } from "../lib/Output.ts";
 import { Signer } from "../lib/Signer.ts";
+import { DateConverter } from "../lib/DateConverter.ts";
 
 export class PerpsCommand {
   public static register(program: Command): void {
@@ -910,14 +911,7 @@ export class PerpsCommand {
   }
 
   private static parseTimestamp(value: string): string {
-    if (/^\d+$/.test(value)) {
-      return value;
-    }
-    const ms = new Date(value).getTime();
-    if (isNaN(ms)) {
-      throw new Error(`Invalid date: ${value}`);
-    }
-    return String(Math.floor(ms / 1000));
+    return DateConverter.toUnixSeconds(value);
   }
 
   private static async history(opts: {
